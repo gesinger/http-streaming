@@ -3,6 +3,9 @@ import {
   default as SyncController,
   syncPointStrategies as strategies } from '../src/sync-controller.js';
 import { playlistWithDuration } from './test-helpers.js';
+import tsInspector from 'mux.js/lib/tools/ts-inspector.js';
+
+const ONE_SECOND_IN_TS = 90000;
 
 function getStrategy(name) {
   for (let i = 0; i < strategies.length; i++) {
@@ -517,4 +520,98 @@ QUnit.test('Correctly calculates expired time', function(assert) {
   expired = this.syncController.getExpiredTime(playlist, 50);
 
   assert.equal(expired, 0, 'estimated expired time using segmentSync');
+});
+
+QUnit.test('uses video start and end by default', function(assert) {
+  const origInspect = tsInspector.inspect;
+
+  tsInspector.inspect = () => {
+    return {
+      video: [{
+        dts: 0,
+        dtsTime: 0
+      }, {
+        dts: ONE_SECOND_IN_TS,
+        dtsTime: 1
+      }],
+      audio: [{
+        dts: ONE_SECOND_IN_TS + ONE_SECOND_IN_TS / 2,
+        dtsTime: 1.5,
+        frameDurationTime: 0.1
+      }, {
+        dts: ONE_SECOND_IN_TS * 2 + ONE_SECOND_IN_TS / 2,
+        dtsTime: 2.5,
+        frameDurationTime: 0.1
+      }]
+    };
+  };
+
+  const segmentInfo = this.syncController.probeTsSegment_({});
+
+  assert.deepEqual(segmentInfo, {
+    start: 0,
+    end: 1,
+    containsVideo: true,
+    containsAudio: true
+  }, 'uses video times by default');
+
+  tsInspector.inspect = origInspect;
+});
+
+QUnit.test('adds frame duration to audio segment end time', function(assert) {
+  const origInspect = tsInspector.inspect;
+
+  tsInspector.inspect = () => {
+    return {
+      video: [],
+      audio: [{
+        dts: ONE_SECOND_IN_TS + ONE_SECOND_IN_TS / 2,
+        dtsTime: 1.5,
+        frameDurationTime: 0.1
+      }, {
+        dts: ONE_SECOND_IN_TS * 2 + ONE_SECOND_IN_TS / 2,
+        dtsTime: 2.5,
+        frameDurationTime: 0.1
+      }]
+    };
+  };
+
+  const segmentInfo = this.syncController.probeTsSegment_({});
+
+  assert.deepEqual(segmentInfo, {
+    start: 1.5,
+    end: 2.5 + 0.1,
+    containsVideo: false,
+    containsAudio: true
+  }, 'adds frame duration to audio segment end time');
+
+  tsInspector.inspect = origInspect;
+});
+
+QUnit.test('does not add frame duration when no frame duration', function(assert) {
+  const origInspect = tsInspector.inspect;
+
+  tsInspector.inspect = () => {
+    return {
+      video: [],
+      audio: [{
+        dts: ONE_SECOND_IN_TS + ONE_SECOND_IN_TS / 2,
+        dtsTime: 1.5
+      }, {
+        dts: ONE_SECOND_IN_TS * 2 + ONE_SECOND_IN_TS / 2,
+        dtsTime: 2.5
+      }]
+    };
+  };
+
+  const segmentInfo = this.syncController.probeTsSegment_({});
+
+  assert.deepEqual(segmentInfo, {
+    start: 1.5,
+    end: 2.5,
+    containsVideo: false,
+    containsAudio: true
+  }, 'end time is audio end dts when no frame duration');
+
+  tsInspector.inspect = origInspect;
 });

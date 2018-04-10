@@ -8,8 +8,6 @@ import { sumDurations } from './playlist';
 import videojs from 'video.js';
 import logger from './util/logger';
 
-const tsprobe = tsInspector.inspect;
-
 export const syncPointStrategies = [
   // Stategy "VOD": Handle the VOD-case where the sync-point is *always*
   //                the equivalence display-time 0 === segment-index 0
@@ -446,7 +444,7 @@ export default class SyncController extends videojs.EventTarget {
    * @return {object} The start and end time of the current segment in "media time"
    */
   probeTsSegment_(segmentInfo) {
-    let timeInfo = tsprobe(segmentInfo.bytes, this.inspectCache_);
+    let timeInfo = tsInspector.inspect(segmentInfo.bytes, this.inspectCache_);
     let segmentStartTime;
     let segmentEndTime;
 
@@ -457,11 +455,18 @@ export default class SyncController extends videojs.EventTarget {
     if (timeInfo.video && timeInfo.video.length === 2) {
       this.inspectCache_ = timeInfo.video[1].dts;
       segmentStartTime = timeInfo.video[0].dtsTime;
+      // TODO add duration of last frame
+      // this may need to wait until we move appends to after transmuxing, as getting the
+      // last video frame duration ends up with more complexity than it's worth for the
+      // rare instances where this impacts playback
       segmentEndTime = timeInfo.video[1].dtsTime;
     } else if (timeInfo.audio && timeInfo.audio.length === 2) {
       this.inspectCache_ = timeInfo.audio[1].dts;
       segmentStartTime = timeInfo.audio[0].dtsTime;
-      segmentEndTime = timeInfo.audio[1].dtsTime;
+      segmentEndTime = timeInfo.audio[1].dtsTime +
+        // technically we should always be adding the frame duration, however, if by
+        // chance we weren't able to get a proper value, default to 0
+        (timeInfo.audio[1].frameDurationTime || 0);
     }
 
     return {
