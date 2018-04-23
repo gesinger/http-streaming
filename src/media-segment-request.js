@@ -4,6 +4,7 @@ import { stringToArrayBuffer } from './util/string-to-array-buffer';
 import { transmux } from './segment-transmuxer';
 import { probeMp4StartTime } from './util/segment';
 import { inspect as inspectMp4 } from 'mux.js/lib/tools/mp4-inspector';
+import { parseType as parseBoxType } from 'mux.js/lib/mp4/probe';
 
 const { createTransferableMessage } = BinUtils;
 
@@ -387,14 +388,25 @@ const handleProgress = (segment, progressFn, dataFn) => (event) => {
   return progressFn(event, segment);
 };
 
-const completeMp4BoxesOffset = (bytes) => {
+const completeMp4BoxesOffset = (bytes, reachesEndOfFile) => {
   let completeBoxesOffset = 0;
   let remainingBytes = bytes.byteLength - completeBoxesOffset;
   const view = new DataView(bytes.buffer);
 
   // 4 bytes for size, 4 bytes for box type
   while (remainingBytes >= 8) {
-    const boxLength = view.getUint32(completeBoxesOffset);
+    let boxLength = view.getUint32(completeBoxesOffset);
+
+    // from Part 12: ISO base media file format
+    // "if size is 0, then this box is the last one in the file, and its contents extend
+    // to the end of the file (normally only used for a Media Data Box)"
+    if (boxLength === 0) {
+      if (!reachesEndOfFile) {
+        break;
+      }
+
+      boxLength = remainingBytes;
+    }
 
     if (remainingBytes < boxLength) {
       // We don't have enough data to parse the full box
@@ -410,11 +422,93 @@ const completeMp4BoxesOffset = (bytes) => {
   return completeBoxesOffset;
 };
 
+// TODO this will have to change
+const rawDataForBox = (bytes, boxType) => {
+  const view = new DataView(bytes.buffer);
+  let offset = 4;
+
+  for (; offset < bytes.length; offset += 4) {
+    if (parseBoxType(bytes.subarray(offset, offset + 4)) === boxType) {
+      const boxLength = view.getUint32(offset - 4);
+
+      if (boxLength === 0) {
+        return bytes.subarray(offset - 4);
+      }
+
+      return bytes.subarray(offset - 4, boxLength);
+    }
+  }
+
+  return null;
+};
+
 const parseMp4AndNotify = ({segment, bytes, isPartial, dataFn, doneFn}) => {
-  const completeBoxesOffset = completeMp4BoxesOffset(bytes);
+  // const boxes = mp4Parser.parse(bytes, isPartial);
+  const completeBoxesOffset = completeMp4BoxesOffset(bytes, isPartial);
   const parsedMp4 = inspectMp4(bytes.subarray(0, completeBoxesOffset));
 
-  console.log('parsedMp4', parsedMp4);
+  segment.boxes = segment.boxes || {};
+
+  // An ISO BMFF media segment is defined in this specification as one optional Segment
+  // Type Box (styp) followed by a single Movie Fragment Box (moof) followed by one or
+  // more Media Data Boxes (mdat). If the Segment Type Box is not present, the segment
+  // must conform to the brands listed in the File Type Box (ftyp) in the initialization
+  // segment.
+  // https://w3c.github.io/media-source/isobmff-byte-stream-format.html
+  let mdats = [];
+
+  parsedMp4.forEach((box) => {
+    if (box.type === 'styp') {
+      segment.boxes.styp = box;
+      segment.boxes.styp.rawData = rawDataForBox(bytes, 'styp');
+    }
+    if (box.type === 'moof') {
+      segment.boxes.moof = box;
+      segment.boxes.moof.rawData = rawDataForBox(bytes, 'moof');
+    }
+    if (box.type === 'sidx') {
+      segment.boxes.sidx = box;
+      segment.boxes.sidx.rawData = rawDataForBox(bytes, 'sidx');
+    }
+    if (box.type === 'mdat') {
+      box.rawData = rawDataForBox(bytes, 'mdat');
+      if (box.rawData.length === box.size) {
+        mdats.push(box);
+      }
+    }
+  });
+
+  let resultBytes = new Uint8Array();
+
+  if (segment.boxes.styp && segment.boxes.moof && mdats.length) {
+    const totalBytes = segment.boxes.styp.rawData.length +
+      segment.boxes.sidx.rawData.length +
+      segment.boxes.moof.rawData.length +
+      mdats.reduce((acc, mdat) => { acc += mdat.rawData.length; return acc; }, 0);
+    let offset = 0;
+
+    resultBytes = new Uint8Array(totalBytes);
+
+    resultBytes.set(segment.boxes.styp.rawData);
+    offset += segment.boxes.styp.rawData.length;
+    resultBytes.set(segment.boxes.sidx.rawData, offset);
+    offset += segment.boxes.sidx.rawData.length;
+    resultBytes.set(segment.boxes.moof.rawData, offset);
+    mdats.forEach((mdat) => {
+      resultBytes.set(mdat, offset);
+      offset += mdat.length;
+    });
+  }
+
+  if (resultBytes.length !== 0) {
+    console.log(resultBytes);
+    dataFn(segment, {
+      data: resultBytes,
+      // TODO
+      timingInfo: {
+      }
+    });
+  }
 
   // const startTime = probeMp4StartTime(bytes, segment.map.bytes);
 
@@ -427,7 +521,7 @@ const parseMp4AndNotify = ({segment, bytes, isPartial, dataFn, doneFn}) => {
   // });
   // doneFn(null, segment, {});
 
-  return 0;
+  return completeBoxesOffset;
 };
 
 const handleDecryptedBytes = ({

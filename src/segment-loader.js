@@ -1078,7 +1078,11 @@ export default class SegmentLoader extends videojs.EventTarget {
     if (isFmp4(segmentInfo.segment)) {
       // TODO do we need this here? maybe handle map directly
       segmentInfo.segment.map.bytes = simpleSegment.map.bytes;
-      segmentInfo.timingInfo = result.timingInfo;
+      // TODO
+      // segmentInfo.timingInfo = result.timingInfo;
+      segmentInfo.timingInfo = {
+        start: segmentInfo.startOfSegment
+      };
       segmentInfo.timingInfo.end = segmentInfo.timingInfo.start + segmentInfo.duration;
       // for fmp4 the loader type is used to determine whether audio or video, it doesn't
       // come back from result
