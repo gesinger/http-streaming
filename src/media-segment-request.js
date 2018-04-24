@@ -418,13 +418,20 @@ const handleDecryptedBytes = ({
   doneFn
 }) => {
   if (segment.map) {
-    return parseMp4AndNotify({
+    const bytesUsed = parseMp4AndNotify({
       segment,
       bytes,
       isPartial,
       dataFn,
       doneFn
     });
+
+    if (!isPartial) {
+      // TODO
+      doneFn(null, segment, {});
+    }
+
+    return bytesUsed;
   }
 
   // ts
