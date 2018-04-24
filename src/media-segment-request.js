@@ -363,7 +363,9 @@ const handleProgress = (segment, progressFn, dataFn) => (event) => {
   const request = event.target;
 
   // don't support encrypted segments
-  if (!segment.key) {
+  if (!segment.key &&
+      // ensure init segment finished
+      (!segment.map || segment.map.bytes) ) {
     const newBytes = stringToArrayBuffer(
       request.responseText.substring(segment.lastReachedChar || 0));
 
@@ -390,7 +392,7 @@ const handleProgress = (segment, progressFn, dataFn) => (event) => {
 const parseMp4AndNotify = ({segment, bytes, isPartial, dataFn, doneFn}) => {
   const result = boxParsers.inspectMp4({
     data: bytes,
-    isEndOfSegment: isPartial,
+    isEndOfSegment: !isPartial,
     boxes: segment.boxes
   });
 

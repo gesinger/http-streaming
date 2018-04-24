@@ -303,17 +303,16 @@ const inspectMp4 = ({ data, isEndOfSegment, boxes }) => {
     // cache these for reuse
     if (box.type === 'styp') {
       boxes.styp = box;
+      continue;
     }
     if (box.type === 'sidx') {
       boxes.sidx = box;
+      continue;
     }
     if (box.type === 'moof') {
       boxes.moof = box;
+      continue;
     }
-
-    // only add to new boxes if they are not top level (should be for each following
-    // segment)
-    continue;
 
     newBoxes.push(box);
   }
@@ -330,7 +329,7 @@ const inspectMp4 = ({ data, isEndOfSegment, boxes }) => {
     return result;
   }
 
-  newBoxes.unshift(result.boxes.unused);
+  (result.boxes.unused || []).concat(newBoxes);
 
   result.bytes = makeMp4Fragment(boxes, newBoxes);
 
@@ -339,17 +338,17 @@ const inspectMp4 = ({ data, isEndOfSegment, boxes }) => {
 
 const makeMp4Fragment = ({ styp, sidx, moof }, boxes) => {
   const length =
-    (styp ? styp.length : 0) +
-    (sidx ? sidx.length : 0) +
-    (moof ? moof.length : 0) +
-    boxes.reduce((acc, box) => { acc += box.length; return acc }, 0);
+    (styp ? styp.rawBytes.length : 0) +
+    (sidx ? sidx.rawBytes.length : 0) +
+    (moof ? moof.rawBytes.length : 0) +
+    boxes.reduce((acc, box) => { acc += box.rawBytes.length; return acc }, 0);
   const bytes = new Uint8Array(length);
   let offset = 0;
 
   ([styp, sidx, moof].concat(boxes)).forEach((box) => {
     if (box) {
       bytes.set(box.rawBytes, offset);
-      offset += box.length;
+      offset += box.rawBytes.length;
     }
   });
 
