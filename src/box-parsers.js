@@ -267,7 +267,7 @@ const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes }) => {
   const result = {
     numUsedBytes: 0
   };
-  const view = new DataView(data.buffer);
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const newBoxes = [];
   let offset = 0;
 
