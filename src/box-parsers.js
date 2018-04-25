@@ -1,5 +1,6 @@
 import videojs from 'video.js';
 import { parseType } from 'mux.js/lib/mp4/probe';
+import { parse as parseSampleFlags } from 'mux.js/lib/tools/mp4-inspector';
 
 const nalParse = (avcStream) => {
   const avcView =
