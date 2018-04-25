@@ -250,7 +250,7 @@ const sdtp = (data) => {
  * @param config.boxes {Array} array of bytes of data
  * @return {array} a javascript array of potentially nested box objects
  */
-const inspectMp4 = ({ data, isEndOfSegment, boxes }) => {
+const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes }) => {
   const result = {
     numUsedBytes: 0
   };
@@ -258,7 +258,7 @@ const inspectMp4 = ({ data, isEndOfSegment, boxes }) => {
   const newBoxes = [];
   let offset = 0;
 
-  boxes = boxes || {};
+  topLevelBoxes = topLevelBoxes || {};
 
   while (offset < data.byteLength) {
     // 4 bytes for box length, 4 bytes for type (8 bytes total minimum box size)
@@ -302,22 +302,23 @@ const inspectMp4 = ({ data, isEndOfSegment, boxes }) => {
 
     // cache these for reuse
     if (box.type === 'styp') {
-      boxes.styp = box;
+      topLevelBoxes.styp = box;
       continue;
     }
     if (box.type === 'sidx') {
-      boxes.sidx = box;
+      topLevelBoxes.sidx = box;
       continue;
     }
+    // TODO: might need to remove this from topLevelBoxes
     if (box.type === 'moof') {
-      boxes.moof = box;
+      topLevelBoxes.moof = box;
       continue;
     }
 
     newBoxes.push(box);
   }
 
-  result.boxes = boxes;
+  result.boxes = topLevelBoxes;
 
   const hasMdat = newBoxes.reduce((acc, box) => {
     return acc || box.type === 'mdat';
@@ -329,9 +330,10 @@ const inspectMp4 = ({ data, isEndOfSegment, boxes }) => {
     return result;
   }
 
+  // Now that we have an mdat, we can append
   (result.boxes.unused || []).concat(newBoxes);
 
-  result.bytes = makeMp4Fragment(boxes, newBoxes);
+  result.bytes = makeMp4Fragment(topLevelBoxes, newBoxes);
 
   return result;
 };
