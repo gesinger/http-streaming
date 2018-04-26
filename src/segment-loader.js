@@ -1232,7 +1232,7 @@ export default class SegmentLoader extends videojs.EventTarget {
       requestId: segmentInfo.requestId,
       transmuxer: segmentInfo.transmuxer,
       audioAppendStart: segmentInfo.audioAppendStart,
-      gopsToAlignWith: segmentInfo.gopsToAlignWith
+      gopsToAlignWith: segmentInfo.gopsToAlignWith,
     };
 
     if (segment.key) {
@@ -1250,6 +1250,7 @@ export default class SegmentLoader extends videojs.EventTarget {
 
     if (isFmp4(segment)) {
       simpleSegment.map = this.initSegmentForMap(segment.map);
+      simpleSegment.isVideo = this.loaderType_ === 'main';
     }
 
     return simpleSegment;

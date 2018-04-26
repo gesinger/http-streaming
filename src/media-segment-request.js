@@ -393,7 +393,8 @@ const parseMp4AndNotify = ({segment, bytes, isPartial, dataFn, doneFn}) => {
   const result = boxParsers.inspectMp4({
     data: bytes,
     isEndOfSegment: !isPartial,
-    boxes: segment.boxes
+    boxes: segment.boxes,
+    isVideoOnly: segment.isVideo
   });
 
   if (result.bytes && result.bytes.length) {

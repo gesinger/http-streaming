@@ -1,6 +1,11 @@
 import videojs from 'video.js';
 import { parseType } from 'mux.js/lib/mp4/probe';
 import { parse as parseSampleFlags } from 'mux.js/lib/tools/mp4-inspector';
+import {
+  discardEmulationPreventionBytes,
+  readSequenceParameterSet
+} from 'mux.js/lib/codecs/h264';
+import mp4Generator from 'mux.js/lib/mp4/mp4-generator.js';
 
 const nalParse = (avcStream) => {
   const avcView =
@@ -255,7 +260,64 @@ const sdtp = (data) => {
   return result;
 };
 
+const makeNalPacket = (nalUnitBytes) => {
+ const packet = {
+   // trackId: trackId,
+   // pts: currentPts,
+   // dts: currentDts,
+   data: nalUnitBytes
+ };
+
+  switch (nalUnitBytes[0] & 0x1f) {
+  case 0x05:
+    packet.nalUnitType = 'slice_layer_without_partitioning_rbsp_idr';
+    break;
+  case 0x06:
+    packet.nalUnitType = 'sei_rbsp';
+    packet.escapedRBSP = discardEmulationPreventionBytes(nalUnitBytes.subarray(1));
+    break;
+  case 0x07:
+    packet.nalUnitType = 'seq_parameter_set_rbsp';
+    packet.escapedRBSP = discardEmulationPreventionBytes(nalUnitBytes.subarray(1));
+    packet.config = readSequenceParameterSet(packet.escapedRBSP);
+    break;
+  case 0x08:
+    packet.nalUnitType = 'pic_parameter_set_rbsp';
+    break;
+  case 0x09:
+    packet.nalUnitType = 'access_unit_delimiter_rbsp';
+    break;
+
+  default:
+    break;
+  }
+
+  return packet;
+};
+
+const parseNalUnitPackets = (mdatData) => {
+  const nalUnits = [];
+  const view = new DataView(mdatData.buffer, mdatData.byteOffset, mdatData.byteLength);
+  let offset = 0;
+
+  while (offset < mdatData.length) {
+    // TODO should be configurable to different lengths
+    const nalUnitLength = view.getUint32(offset)
+
+    offset += 4;
+
+    const nalUnit = mdatData.subarray(offset, offset + nalUnitLength);
+
+    nalUnits.push(makeNalPacket(nalUnit));
+
+		offset += nalUnitLength;
+  }
+
+  return nalUnits;
+};
+
 /**
+ * TODO remove isVideoOnly
  * Return a javascript array of box objects parsed from part of an ISO base media file
  * @param config {Object}
  * @param config.data {Uint8Array} array of bytes of data that may or may not reach the
@@ -264,7 +326,7 @@ const sdtp = (data) => {
  * @param config.boxes {Array} array of bytes of data
  * @return {array} a javascript array of potentially nested box objects
  */
-const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes }) => {
+const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes, isVideoOnly }) => {
   const result = {
     numUsedBytes: 0
   };
@@ -339,24 +401,53 @@ const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes }) => {
     return result;
   }
 
-  // Now that we have an mdat, we can append
-  const innerBoxes = (result.boxes.unused || []).concat(newBoxes);
+  const moof = newBoxes.reduce((acc, box) => {
+    if (box.type === 'moof') {
+      acc = box;
+    }
+    return acc;
+  }, null);
+  const mdat = newBoxes.reduce((acc, box) => {
+    if (box.type === 'mdat') {
+      acc = box;
+    }
+    return acc;
+  }, null);
 
-  result.bytes = makeMp4Fragment(topLevelBoxes, innerBoxes);
+  if (!isVideoOnly) {
+    result.bytes = makeMp4Fragment(topLevelBoxes, moof, mdat);
+    return result;
+  }
+
+  const mdatBytes = mdat.rawBytes.subarray(8);
+  const nalUnits = parseNalUnitPackets(mdatBytes);
+  const frames = groupNalsIntoFrames(nalUnits);
+
+  // TODO handle cache (unused bytes?)
+
+  if (!frames.length) {
+    debugger;
+  }
+
+  const newMdatBytes = mp4Generator.mdat(concatenateNalData(frames));
+
+  result.bytes = makeMp4Fragment(topLevelBoxes, moof, {
+    rawBytes: newMdatBytes
+  });
 
   return result;
 };
 
-const makeMp4Fragment = ({ styp, sidx, moof }, boxes) => {
+const makeMp4Fragment = ({ styp, sidx }, moof, mdat) => {
   const length =
     (styp ? styp.rawBytes.length : 0) +
     (sidx ? sidx.rawBytes.length : 0) +
-    (moof ? moof.rawBytes.length : 0) +
-    boxes.reduce((acc, box) => { acc += box.rawBytes.length; return acc }, 0);
+    moof.rawBytes.length +
+    mdat.rawBytes.length;
   const bytes = new Uint8Array(length);
   let offset = 0;
 
-  ([styp, sidx, moof].concat(boxes)).forEach((box) => {
+  ([styp, sidx, moof, mdat]).forEach((box) => {
     if (box) {
       bytes.set(box.rawBytes, offset);
       offset += box.rawBytes.length;
@@ -364,6 +455,75 @@ const makeMp4Fragment = ({ styp, sidx, moof }, boxes) => {
   });
 
   return bytes;
+};
+
+// Convert an array of nal units into an array of frames with each frame being
+// composed of the nal units that make up that frame
+// Also keep track of cummulative data about the frame from the nal units such
+// as the frame duration, starting pts, etc.
+const groupNalsIntoFrames = (nalUnits) => {
+  var
+    i,
+    currentNal,
+    currentFrame = [],
+    frames = [];
+
+  frames.byteLength = 0;
+  frames.nalCount = 0;
+
+  currentFrame.byteLength = 0;
+
+  for (i = 0; i < nalUnits.length; i++) {
+    currentNal = nalUnits[i];
+
+    // Specifically flag key frames for ease of use later
+    if (currentNal.nalUnitType === 'slice_layer_without_partitioning_rbsp_idr') {
+      frames.byteLength += currentFrame.byteLength;
+      frames.nalCount += currentFrame.length;
+      frames.push(currentFrame);
+      currentFrame = [];
+      currentFrame.byteLength = 0;
+      currentFrame.keyFrame = true;
+    }
+    currentFrame.byteLength += currentNal.data.byteLength;
+    currentFrame.push(currentNal);
+  }
+
+  // Push the final frame
+  frames.byteLength += currentFrame.byteLength;
+  frames.nalCount += currentFrame.length;
+  frames.push(currentFrame);
+  return frames;
+};
+
+// generate the track's raw mdat data from an array of frames
+const concatenateNalData = (frames) => {
+  var
+    i, j,
+    currentFrame,
+    currentNal,
+    dataOffset = 0,
+    nalsByteLength = frames.byteLength,
+    numberOfNals = frames.nalCount,
+    totalByteLength = nalsByteLength + 4 * numberOfNals,
+    data = new Uint8Array(totalByteLength),
+    view = new DataView(data.buffer);
+
+  // For each Frame..
+  for (i = 0; i < frames.length; i++) {
+    currentFrame = frames[i];
+
+    // For each NAL..
+    for (j = 0; j < currentFrame.length; j++) {
+      currentNal = currentFrame[j];
+
+      view.setUint32(dataOffset, currentNal.data.byteLength);
+      dataOffset += 4;
+      data.set(currentNal.data, dataOffset);
+      dataOffset += currentNal.data.byteLength;
+    }
+  }
+  return data;
 };
 
 const boxParsers = {
