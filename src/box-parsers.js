@@ -227,10 +227,12 @@ const tfhd = (data) => {
   if (defaultSampleFlagsPresent) {
     result.defaultSampleFlags = view.getUint32(i);
   }
+
   return result;
 };
 
 const tfdt = (data) => {
+
   var result = {
     version: data[0],
     flags: new Uint8Array(data.subarray(1, 4)),
@@ -478,9 +480,12 @@ const groupNalsIntoFrames = (nalUnits) => {
 
     // Specifically flag key frames for ease of use later
     if (currentNal.nalUnitType === 'slice_layer_without_partitioning_rbsp_idr') {
+      // Having encountered a new keyframe, push the built previous frame onto frames
       frames.byteLength += currentFrame.byteLength;
       frames.nalCount += currentFrame.length;
       frames.push(currentFrame);
+
+      // Reset currentFrame for the next frame data
       currentFrame = [];
       currentFrame.byteLength = 0;
       currentFrame.keyFrame = true;
@@ -489,10 +494,11 @@ const groupNalsIntoFrames = (nalUnits) => {
     currentFrame.push(currentNal);
   }
 
-  // Push the final frame
+  // Push the final frame since there is no key frame
   frames.byteLength += currentFrame.byteLength;
   frames.nalCount += currentFrame.length;
   frames.push(currentFrame);
+
   return frames;
 };
 
@@ -505,9 +511,10 @@ const concatenateNalData = (frames) => {
     dataOffset = 0,
     nalsByteLength = frames.byteLength,
     numberOfNals = frames.nalCount,
-    totalByteLength = nalsByteLength + 4 * numberOfNals,
+    // Add 4 bytes for each nal's byteLength
+    totalByteLength = nalsByteLength + (4 * numberOfNals),
     data = new Uint8Array(totalByteLength),
-    view = new DataView(data.buffer);
+    view = new DataView(data.buffer, data.byteOffset, data.byteLength);
 
   // For each Frame..
   for (i = 0; i < frames.length; i++) {
