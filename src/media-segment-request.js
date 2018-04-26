@@ -376,6 +376,9 @@ const handleProgress = (segment, progressFn, dataFn) => (event) => {
       dataFn
     });
 
+    if (!segment.lastReachedChar) {
+      segment.lastReachedChar = 0;
+    }
     segment.lastReachedChar += handledBytes;
   }
 
@@ -390,6 +393,10 @@ const handleProgress = (segment, progressFn, dataFn) => (event) => {
 };
 
 const parseMp4AndNotify = ({segment, bytes, isPartial, dataFn, doneFn}) => {
+  if (!bytes.length) {
+    return 0;
+  }
+
   const result = boxParsers.inspectMp4({
     data: bytes,
     isEndOfSegment: !isPartial,

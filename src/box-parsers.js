@@ -99,7 +99,7 @@ const sidx = (data) => {
 // TODO make parameters for everything more generic
 const moof = (data, isEndOfSegment) => {
   return {
-    boxes: inspectMp4({ data, isEndOfSegment })
+    boxes: parseBoxes({ data, isEndOfSegment })
   };
 };
 
@@ -123,7 +123,7 @@ const mfhd = (data) => {
 
 const traf = (data, isEndOfSegment) => {
   return {
-    boxes: inspectMp4({ data, isEndOfSegment })
+    boxes: parseBoxes({ data, isEndOfSegment })
   };
 };
 
@@ -318,25 +318,10 @@ const parseNalUnitPackets = (mdatData) => {
   return nalUnits;
 };
 
-/**
- * TODO remove isVideoOnly
- * Return a javascript array of box objects parsed from part of an ISO base media file
- * @param config {Object}
- * @param config.data {Uint8Array} array of bytes of data that may or may not reach the
- *                                 end of segment
- * @param config.isEndOfSegment {Boolean} if the data reaches the end of the segment
- * @param config.boxes {Array} array of bytes of data
- * @return {array} a javascript array of potentially nested box objects
- */
-const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes, isVideoOnly }) => {
-  const result = {
-    numUsedBytes: 0
-  };
+const parseBoxes = ({ data, isEndOfSegment, allowPartialMdat }) => {
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const newBoxes = [];
+  const boxes = [];
   let offset = 0;
-
-  topLevelBoxes = topLevelBoxes || {};
 
   while (offset < data.byteLength) {
     // 4 bytes for box length, 4 bytes for type (8 bytes total minimum box size)
@@ -350,6 +335,7 @@ const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes, isVideoOnly }) => {
     // "if size is 1 then the actual size is in the field largesize;
     // if size is 0, then this box is the last one in the file, and its contents extend
     // to the end of the file (normally only used for a Media Data Box)"
+    /*
     if (boxLength === 0 && !isEndOfSegment) {
       break;
     }
@@ -359,65 +345,104 @@ const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes, isVideoOnly }) => {
         'end of segment');
       break;
     }
+    */
 
     const boxEnd = boxLength > 1 ? offset + boxLength : data.byteLength;
 
-    if (boxEnd > data.byteLength) {
+    // we can deal with partial mdats, but not other boxes
+    if (boxEnd > data.byteLength && (!allowPartialMdat || boxType !== 'mdat')) {
       break;
     }
 
-    const boxBytes = data.subarray(offset, boxEnd);
+    const boxBytes = boxEnd > data.byteLength ?
+      data.subarray(offset) : data.subarray(offset, boxEnd);
 
     // parse type-specific data
     const box = boxParsers[boxType] ?
       boxParsers[boxType](boxBytes.subarray(8), isEndOfSegment) : {};
-    box.size = boxLength;
+    box.isPartial = boxEnd > data.byteLength;
+    box.size = boxBytes.byteLength;
     box.type = boxType;
     box.rawBytes = boxBytes;
 
-    result.numUsedBytes += boxLength;
     offset = boxEnd;
 
-    // cache these for reuse
-    if (box.type === 'styp') {
-      topLevelBoxes.styp = box;
-      continue;
-    }
-    if (box.type === 'sidx') {
-      topLevelBoxes.sidx = box;
-      continue;
-    }
-
-    newBoxes.push(box);
+    boxes.push(box);
   }
 
-  result.boxes = topLevelBoxes;
+  return boxes;
+};
 
-  const hasMdat = newBoxes.reduce((acc, box) => {
-    return acc || box.type === 'mdat';
-  }, false);
+const getBox = (boxes, type) => {
+  return boxes.reduce((acc, box) => { return box.type === type ? box : acc; }, null);
+};
 
-  if (!hasMdat) {
-    // save them for next time
-    result.boxes.unused = newBoxes;
+const removeBox = (boxes, type) => {
+  for (let i = 0; i < boxes.length; i++) {
+    if (boxes[i].type === type) {
+      boxes.splice(i, 1);
+    }
+  }
+};
+
+/**
+ * TODO remove isVideoOnly
+ * Return a javascript array of box objects parsed from part of an ISO base media file
+ * @param config {Object}
+ * @param config.data {Uint8Array} array of bytes of data that may or may not reach the
+ *                                 end of segment
+ * @param config.isEndOfSegment {Boolean} if the data reaches the end of the segment
+ * @param config.boxes {Array} array of bytes of data
+ * @return {array} a javascript array of potentially nested box objects
+ */
+const inspectMp4 = ({
+  data,
+  isEndOfSegment,
+  boxes: providedBoxes,
+  isVideoOnly
+}) => {
+  providedBoxes = providedBoxes || {};
+
+  const result = {
+    numUsedBytes: 0,
+    boxes: providedBoxes
+  };
+  const boxes = parseBoxes({
+    data,
+    isEndOfSegment,
+    allowPartialMdat: isVideoOnly
+  });
+
+  result.numUsedBytes += boxes.reduce((acc, box) => { acc += box.size; return acc; }, 0);
+
+  // cache these for the future
+  const styp = providedBoxes.styp || getBox(boxes, 'styp');
+  const sidx = providedBoxes.sidx || getBox(boxes, 'sidx');
+  const moof = getBox(boxes, 'moof') || providedBoxes.moof;
+
+  if (styp) {
+    result.boxes.styp = styp;
+    removeBox(boxes, 'styp');
+  }
+  if (sidx) {
+    result.boxes.sidx = sidx;
+    removeBox(boxes, 'sidx');
+  }
+  if (moof) {
+    result.boxes.moof = moof;
+    removeBox(boxes, 'moof');
+  }
+
+  const mdat = getBox(boxes, 'mdat');
+
+  if (!mdat) {
+    // we don't have any frame data until we get to the mdat
     return result;
   }
 
-  const moof = newBoxes.reduce((acc, box) => {
-    if (box.type === 'moof') {
-      acc = box;
-    }
-    return acc;
-  }, null);
-  const mdat = newBoxes.reduce((acc, box) => {
-    if (box.type === 'mdat') {
-      acc = box;
-    }
-    return acc;
-  }, null);
-
   if (!isVideoOnly) {
-    result.bytes = makeMp4Fragment(topLevelBoxes, moof, mdat);
+    // we don't support partial audio fragments...yet
+    result.bytes = makeMp4Fragment(styp, sidx, moof, mdat);
     return result;
   }
 
@@ -425,22 +450,33 @@ const inspectMp4 = ({ data, isEndOfSegment, topLevelBoxes, isVideoOnly }) => {
   const nalUnits = parseNalUnitPackets(mdatBytes);
   const frames = groupNalsIntoFrames(nalUnits);
 
-  // TODO handle cache (unused bytes?)
+  if (!isEndOfSegment && mdat.isPartial) {
+    // always reparse the full mdat
+    result.numUsedBytes -= mdat.rawBytes.byteLength;
+
+    // remove the last frame, since it might not be complete yet
+    // TODO we should know from the sample table whether it is complete, and may not have
+    // to remove it
+    const lastFrame = frames.pop();
+
+    frames.nalCount -= lastFrame.length;
+    frames.byteLength -= lastFrame.byteLength;
+  }
 
   if (!frames.length) {
-    debugger;
+    return result;
   }
 
   const newMdatBytes = mp4Generator.mdat(concatenateNalData(frames));
 
-  result.bytes = makeMp4Fragment(topLevelBoxes, moof, {
+  result.bytes = makeMp4Fragment(styp, sidx, moof, {
     rawBytes: newMdatBytes
   });
 
   return result;
 };
 
-const makeMp4Fragment = ({ styp, sidx }, moof, mdat) => {
+const makeMp4Fragment = (styp, sidx, moof, mdat) => {
   const length =
     (styp ? styp.rawBytes.length : 0) +
     (sidx ? sidx.rawBytes.length : 0) +
