@@ -528,7 +528,7 @@ const handleMdatBytes = ({
 
   const newMdatBytes = mp4Generator.mdat(concatenateFrames(frames));
   const baseMediaDecodeTime = getBox(traf.boxes, 'tfdt').baseMediaDecodeTime;
-  const frameSamples = trun.samples.slice(0, frames.length);
+  const frameSamples = trun.samples.slice(usedNals, usedNals + frames.length);
 
   const newMoof = mp4Generator.moof(sequenceNumber, [{
     id: 1,
@@ -536,6 +536,7 @@ const handleMdatBytes = ({
     baseMediaDecodeTime,
     samples: frameSamples
   }]);
+  // const testMoof = parseBoxes({ data: newMoof, isEndOfSegment });
   sequenceNumber++;
 
   result.bytes = makeMp4Fragment(styp, sidx, {
@@ -554,13 +555,13 @@ const handleMdatBytes = ({
 const makeMp4Fragment = (styp, sidx, moof, mdat) => {
   const length =
     (styp ? styp.rawBytes.length : 0) +
-    (sidx ? sidx.rawBytes.length : 0) +
+    // (sidx ? sidx.rawBytes.length : 0) +
     moof.rawBytes.length +
     mdat.rawBytes.length;
   const bytes = new Uint8Array(length);
   let offset = 0;
 
-  ([styp, sidx, moof, mdat]).forEach((box) => {
+  ([styp, /* sidx, */ moof, mdat]).forEach((box) => {
     if (box) {
       bytes.set(box.rawBytes, offset);
       offset += box.rawBytes.length;
