@@ -512,7 +512,8 @@ const handleMdatBytes = ({
   // const nalUnits = parseNalUnitPackets(mdatBytes);
   const traf = getBox(moof.boxes, 'traf');
   const trun = getBox(traf.boxes, 'trun');
-  const sampleBytes = sampleBytesFromMdat(trun.samples, mdatBytes);
+  const samples = trun.samples.slice(usedNals);
+  const sampleBytes = sampleBytesFromMdat(samples, mdatBytes);
   const numBytesUsed = sampleBytes.reduce((acc, bytes) => acc + bytes.byteLength, 0);
 
   result.numUsedBytes -= (mdatBytes.byteLength - numBytesUsed);
@@ -527,15 +528,14 @@ const handleMdatBytes = ({
 
   const newMdatBytes = mp4Generator.mdat(concatenateFrames(frames));
   const baseMediaDecodeTime = getBox(traf.boxes, 'tfdt').baseMediaDecodeTime;
-  const samples = trun.samples.slice(usedNals, frames.length);
+  const frameSamples = trun.samples.slice(0, frames.length);
 
   const newMoof = mp4Generator.moof(sequenceNumber, [{
     id: 1,
     type: 'video',
     baseMediaDecodeTime,
-    samples
+    samples: frameSamples
   }]);
-  // TODO can't reparse newMoof with parseBoxes({ data: newMoof, isEndOfSegment });
   sequenceNumber++;
 
   result.bytes = makeMp4Fragment(styp, sidx, {
