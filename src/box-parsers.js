@@ -7,6 +7,8 @@ import {
 } from 'mux.js/lib/codecs/h264';
 import mp4Generator from 'mux.js/lib/mp4/mp4-generator.js';
 
+let sequenceNumber = 1;
+
 const nalParse = (avcStream) => {
   const avcView =
     new DataView(avcStream.buffer, avcStream.byteOffset, avcStream.byteLength);
@@ -271,6 +273,9 @@ const makeNalPacket = (nalUnitBytes) => {
  };
 
   switch (nalUnitBytes[0] & 0x1f) {
+  case 0x01:
+    packet.nalUnitType = 'slice_layer_without_partitioning_rbsp';
+    break;
   case 0x05:
     packet.nalUnitType = 'slice_layer_without_partitioning_rbsp_idr';
     break;
@@ -399,14 +404,30 @@ const inspectMp4 = ({
   data,
   isEndOfSegment,
   boxes: providedBoxes,
-  isVideoOnly
+  isVideoOnly,
+  usedNals,
+  isPartialMdat
 }) => {
   providedBoxes = providedBoxes || {};
 
   const result = {
     numUsedBytes: 0,
-    boxes: providedBoxes
+    boxes: providedBoxes,
+    usedNals: usedNals || 0
   };
+
+  if (isPartialMdat) {
+    return handleMdatBytes({
+      mdatBytes: data,
+      isEndOfSegment,
+      styp: result.boxes.styp,
+      sidx: result.boxes.sidx,
+      result,
+      moof: providedBoxes.moof,
+      usedNals
+    });
+  }
+
   const boxes = parseBoxes({
     data,
     isEndOfSegment,
@@ -447,31 +468,84 @@ const inspectMp4 = ({
   }
 
   const mdatBytes = mdat.rawBytes.subarray(8);
-  const nalUnits = parseNalUnitPackets(mdatBytes);
-  const frames = groupNalsIntoFrames(nalUnits);
 
-  if (!isEndOfSegment && mdat.isPartial) {
-    // always reparse the full mdat
-    result.numUsedBytes -= mdat.rawBytes.byteLength;
+  return handleMdatBytes({
+    mdatBytes,
+    styp,
+    sidx,
+    result,
+    isEndOfSegment,
+    moof
+  });
+};
 
-    // remove the last frame, since it might not be complete yet
-    // TODO we should know from the sample table whether it is complete, and may not have
-    // to remove it
-    const lastFrame = frames.pop();
+const sampleBytesFromMdat = (samples, mdatBytes) => {
+  const sampleBytes = [];
+  let offset = 0;
 
-    frames.nalCount -= lastFrame.length;
-    frames.byteLength -= lastFrame.byteLength;
+  for (let i = 0; i < samples.length; i++) {
+    const sample = samples[i];
+
+    if (offset + sample.size > mdatBytes.byteLength) {
+      break;
+    }
+
+    sampleBytes.push(mdatBytes.subarray(offset, offset + sample.size));
+
+    offset += sample.size;
   }
+
+  return sampleBytes;
+};
+
+const handleMdatBytes = ({
+  mdatBytes,
+  result,
+  styp,
+  sidx,
+  isEndOfSegment,
+  moof,
+  usedNals
+}) => {
+  result.isPartialMdat = true;
+
+  // const nalUnits = parseNalUnitPackets(mdatBytes);
+  const traf = getBox(moof.boxes, 'traf');
+  const trun = getBox(traf.boxes, 'trun');
+  const sampleBytes = sampleBytesFromMdat(trun.samples, mdatBytes);
+  const numBytesUsed = sampleBytes.reduce((acc, bytes) => acc + bytes.byteLength, 0);
+
+  result.numUsedBytes -= (mdatBytes.byteLength - numBytesUsed);
+
+  // TODO not formatted as standard frames
+  const frames = sampleBytes.map((bytes) => makeNalPacket(bytes.subarray(4)));
+  // const frames = groupNalsIntoFrames(nalUnits);
 
   if (!frames.length) {
     return result;
   }
 
-  const newMdatBytes = mp4Generator.mdat(concatenateNalData(frames));
+  const newMdatBytes = mp4Generator.mdat(concatenateFrames(frames));
+  const baseMediaDecodeTime = getBox(traf.boxes, 'tfdt').baseMediaDecodeTime;
+  const samples = trun.samples.slice(usedNals, frames.length);
 
-  result.bytes = makeMp4Fragment(styp, sidx, moof, {
+  const newMoof = mp4Generator.moof(sequenceNumber, {
+    id: 1,
+    type: 'video',
+    baseMediaDecodeTime,
+    samples
+  });
+  sequenceNumber++;
+
+  result.bytes = makeMp4Fragment(styp, sidx, {
+    rawBytes: newMoof
+  }, {
     rawBytes: newMdatBytes
   });
+
+  result.usedNals += frames.length;
+
+  console.log(result);
 
   return result;
 };
@@ -536,6 +610,25 @@ const groupNalsIntoFrames = (nalUnits) => {
   frames.push(currentFrame);
 
   return frames;
+};
+
+const concatenateFrames = (frames) => {
+  const totalByteLength = frames.reduce((acc, frame) => acc + frame.data.byteLength, 0) +
+    (4 * frames.length)
+  const data = new Uint8Array(totalByteLength);
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let offset = 0;
+
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i];
+
+    view.setUint32(offset, frame.data.byteLength);
+    offset += 4;
+    data.set(frame.data, offset);
+    offset += frame.data.byteLength;
+  }
+
+  return data;
 };
 
 // generate the track's raw mdat data from an array of frames

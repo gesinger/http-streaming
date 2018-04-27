@@ -401,7 +401,9 @@ const parseMp4AndNotify = ({segment, bytes, isPartial, dataFn, doneFn}) => {
     data: bytes,
     isEndOfSegment: !isPartial,
     boxes: segment.boxes,
-    isVideoOnly: segment.isVideo
+    isVideoOnly: segment.isVideo,
+    usedNals: segment.usedNals,
+    isPartialMdat: segment.isPartialMdat
   });
 
   if (result.bytes && result.bytes.length) {
@@ -414,6 +416,8 @@ const parseMp4AndNotify = ({segment, bytes, isPartial, dataFn, doneFn}) => {
   }
 
   segment.boxes = result.boxes;
+  segment.usedNals = result.usedNals;
+  segment.isPartialMdat = result.isPartialMdat;
 
   return result.numUsedBytes;
 };
