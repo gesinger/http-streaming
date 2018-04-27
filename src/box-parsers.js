@@ -529,12 +529,13 @@ const handleMdatBytes = ({
   const baseMediaDecodeTime = getBox(traf.boxes, 'tfdt').baseMediaDecodeTime;
   const samples = trun.samples.slice(usedNals, frames.length);
 
-  const newMoof = mp4Generator.moof(sequenceNumber, {
+  const newMoof = mp4Generator.moof(sequenceNumber, [{
     id: 1,
     type: 'video',
     baseMediaDecodeTime,
     samples
-  });
+  }]);
+  // TODO can't reparse newMoof with parseBoxes({ data: newMoof, isEndOfSegment });
   sequenceNumber++;
 
   result.bytes = makeMp4Fragment(styp, sidx, {
