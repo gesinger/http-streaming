@@ -417,6 +417,8 @@ const inspectMp4 = ({
   };
 
   if (isPartialMdat) {
+    result.numUsedBytes += data.byteLength;
+
     return handleMdatBytes({
       mdatBytes: data,
       isEndOfSegment,
@@ -498,6 +500,9 @@ const sampleBytesFromMdat = (samples, mdatBytes) => {
   return sampleBytes;
 };
 
+// TODO hardcoding
+let globalBaseMediaDecodeTime = 0;
+
 const handleMdatBytes = ({
   mdatBytes,
   result,
@@ -507,36 +512,82 @@ const handleMdatBytes = ({
   moof,
   usedNals
 }) => {
+  usedNals = usedNals || 0;
+
   result.isPartialMdat = true;
 
   // const nalUnits = parseNalUnitPackets(mdatBytes);
   const traf = getBox(moof.boxes, 'traf');
   const trun = getBox(traf.boxes, 'trun');
-  const samples = trun.samples.slice(usedNals);
-  const sampleBytes = sampleBytesFromMdat(samples, mdatBytes);
+  let samples = trun.samples.slice(usedNals);
+  let sampleBytes = sampleBytesFromMdat(samples, mdatBytes);
+  // TODO hardcoding
+  if (sampleBytes.length >= 60) {
+    sampleBytes = sampleBytes.slice(0, 60);
+  } else {
+    result.numUsedBytes -= mdatBytes.byteLength;
+    return result;
+  }
   const numBytesUsed = sampleBytes.reduce((acc, bytes) => acc + bytes.byteLength, 0);
 
-  result.numUsedBytes -= (mdatBytes.byteLength - numBytesUsed);
-
   // TODO not formatted as standard frames
-  const frames = sampleBytes.map((bytes) => makeNalPacket(bytes.subarray(4)));
+  let frames = sampleBytes.map((bytes) => makeNalPacket(bytes.subarray(4)));
   // const frames = groupNalsIntoFrames(nalUnits);
+
+  result.numUsedBytes -= (mdatBytes.byteLength - numBytesUsed);
 
   if (!frames.length) {
     return result;
   }
 
-  const newMdatBytes = mp4Generator.mdat(concatenateFrames(frames));
   const baseMediaDecodeTime = getBox(traf.boxes, 'tfdt').baseMediaDecodeTime;
-  const frameSamples = trun.samples.slice(usedNals, usedNals + frames.length);
 
+  result.usedNals += frames.length;
+
+  /*
+  if (frames.length > 1) {
+    result.multiBytes = [];
+
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i];
+      const frameSample = trun.samples[usedNals + i];
+      const newMdatBytes = mp4Generator.mdat(concatenateFrames([frame]));
+      // frameSample.duration = 90000 * 1/30;
+      const newMoof = mp4Generator.moof(sequenceNumber, [{
+        id: 1,
+        type: 'video',
+        baseMediaDecodeTime: globalBaseMediaDecodeTime,
+        // baseMediaDecodeTime,
+        samples: [frameSample]
+      }]);
+      sequenceNumber++;
+
+      globalBaseMediaDecodeTime += 1;
+
+      const testMoof = parseBoxes({ data: newMoof, isEndOfSegment })[0];
+
+      result.multiBytes.push(makeMp4Fragment(styp, sidx, {
+        rawBytes: newMoof
+      }, {
+        rawBytes: newMdatBytes
+      }));
+    }
+
+    console.log(result);
+
+    return result;
+  }
+  */
+
+  const frameSamples = trun.samples.slice(usedNals, usedNals + frames.length);
+  const newMdatBytes = mp4Generator.mdat(concatenateFrames(frames));
   const newMoof = mp4Generator.moof(sequenceNumber, [{
     id: 1,
     type: 'video',
-    baseMediaDecodeTime,
+    baseMediaDecodeTime: globalBaseMediaDecodeTime,
     samples: frameSamples
   }]);
-  // const testMoof = parseBoxes({ data: newMoof, isEndOfSegment });
+  // const testMoof = parseBoxes({ data: newMoof, isEndOfSegment })[0];
   sequenceNumber++;
 
   result.bytes = makeMp4Fragment(styp, sidx, {
@@ -545,7 +596,7 @@ const handleMdatBytes = ({
     rawBytes: newMdatBytes
   });
 
-  result.usedNals += frames.length;
+  globalBaseMediaDecodeTime += 60;
 
   console.log(result);
 

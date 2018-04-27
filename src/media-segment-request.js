@@ -406,6 +406,15 @@ const parseMp4AndNotify = ({segment, bytes, isPartial, dataFn, doneFn}) => {
     isPartialMdat: segment.isPartialMdat
   });
 
+  if (result.multiBytes) {
+    result.multiBytes.forEach((bytes) => {
+      dataFn(segment, {
+        data: bytes,
+        // TODO add start time (and end time if possible)
+        timingInfo: {}
+      });
+    });
+  }
   if (result.bytes && result.bytes.length) {
     dataFn(segment, {
       data: result.bytes,
