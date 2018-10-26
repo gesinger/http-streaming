@@ -324,9 +324,10 @@ export default class PlaylistLoader extends EventTarget {
     *
     * @param {Object=} playlist the parsed media playlist
     * object to switch to
+    * @param {Boolean} shouldDelay whether or not to delay the media update
     * @return {Playlist} the current loaded media
     */
-  media(playlist) {
+  media(playlist, shouldDelay) {
     // getter
     if (!playlist) {
       return this.media_;
@@ -337,8 +338,6 @@ export default class PlaylistLoader extends EventTarget {
       throw new Error('Cannot switch media playlist from ' + this.state);
     }
 
-    const startingState = this.state;
-
     // find the playlist object if the target playlist has been
     // specified by URI
     if (typeof playlist === 'string') {
@@ -348,6 +347,15 @@ export default class PlaylistLoader extends EventTarget {
       playlist = this.master.playlists[playlist];
     }
 
+    if (shouldDelay) {
+      const delay = (playlist.targetDuration / 2) * 1000 || 5 * 1000;
+
+      this.mediaUpdateTimeout =
+        window.setTimeout(this.media.bind(this, playlist, false), delay);
+      return;
+    }
+
+    const startingState = this.state;
     const mediaChange = !this.media_ || playlist.uri !== this.media_.uri;
 
     // switch to fully loaded playlists immediately

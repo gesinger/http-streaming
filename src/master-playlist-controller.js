@@ -333,7 +333,7 @@ export class MasterPlaylistController extends videojs.EventTarget {
         // one is updating (and give the player a chance to re-adjust to the
         // safe live point).
         this.blacklistCurrentPlaylist({
-          message: 'Playlist no longer updating.'
+          message: 'Playlist no longer updating'
         });
         // useful for monitoring QoS
         this.tech_.trigger('playliststuck');
@@ -453,7 +453,7 @@ export class MasterPlaylistController extends videojs.EventTarget {
     this.mainSegmentLoader_.on('earlyabort', () => {
       this.blacklistCurrentPlaylist({
         message: 'Aborted early because there isn\'t enough bandwidth to complete the ' +
-          'request without rebuffering.'
+          'request without rebuffering'
       }, ABORT_EARLY_BLACKLIST_SECONDS);
     });
 
@@ -763,17 +763,36 @@ export class MasterPlaylistController extends videojs.EventTarget {
       }
     }
 
+    let playlists = this.masterPlaylistLoader_.master.playlists;
+
+    if (playlists.length === 1) {
+      // don't blacklist this playlist because it's the only playlist
+      videojs.log.warn('Problem encountered with the current ' +
+                       'HLS playlist. Trying again since it is the only playlist.');
+
+      this.tech_.trigger('retryplaylist');
+      return this.masterPlaylistLoader_.load(true);
+    }
+
     let isFinalRendition =
       this.masterPlaylistLoader_.master.playlists.filter(isEnabled).length === 1;
 
     if (isFinalRendition) {
-      // Never blacklisting this playlist because it's final rendition
-      videojs.log.warn('Problem encountered with the current ' +
-                       'HLS playlist. Trying again since it is the final playlist.');
-
+      // Since we're on the final non-blacklisted playlist, and we're about to blacklist
+      // it, instead of erring the player or retrying this playlist, clear out the current
+      // blacklist. This allows other playlists to be attempted in case any have been
+      // fixed.
+      videojs.log.warn('Removing all playlists from the blacklist because the last ' +
+                       'rendition is about to be blacklisted.');
+      playlists.forEach((playlist) => {
+        delete playlist.excludeUntil;
+      });
+      // Technically we are retrying a playlist, in that we are simply retrying a previous
+      // playlist. This is needed for users relying on the retryplaylist event to catch a
+      // case where the player might be stuck and looping through "dead" playlists.
       this.tech_.trigger('retryplaylist');
-      return this.masterPlaylistLoader_.load(isFinalRendition);
     }
+
     // Blacklist this playlist
     currentPlaylist.excludeUntil = Date.now() + (blacklistDuration * 1000);
     this.tech_.trigger('blacklistplaylist');
@@ -782,10 +801,10 @@ export class MasterPlaylistController extends videojs.EventTarget {
     // Select a new playlist
     nextPlaylist = this.selectPlaylist();
     videojs.log.warn('Problem encountered with the current HLS playlist.' +
-                     (error.message ? ' ' + error.message : '') +
+                     (error.message ? ` ${error.message}.` : '') +
                      ' Switching to another playlist.');
 
-    return this.masterPlaylistLoader_.media(nextPlaylist);
+    return this.masterPlaylistLoader_.media(nextPlaylist, isFinalRendition);
   }
 
   /**
