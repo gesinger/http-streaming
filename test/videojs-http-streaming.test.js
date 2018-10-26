@@ -1277,39 +1277,50 @@ QUnit.test('playlist 404 should blacklist media', function(assert) {
   media = this.player.tech_.hls.playlists.master.playlists[url];
   assert.ok(media.excludeUntil > 0, 'original media blacklisted for some time');
   assert.equal(this.env.log.warn.calls, 1, 'warning logged for blacklist');
-  assert.equal(this.env.log.warn.args[0],
-              'Problem encountered with the current HLS playlist. HLS playlist request error at URL: media.m3u8 Switching to another playlist.',
-              'log generic error message');
+  assert.equal(
+    this.env.log.warn.args[0],
+    'Problem encountered with the current HLS playlist.' +
+      ' HLS playlist request error at URL: media.m3u8. Switching to another playlist.',
+    'logged error message');
   assert.equal(blacklistplaylist, 1, 'there is one blacklisted playlist');
   assert.equal(hlsRenditionBlacklistedEvents, 1, 'an hls-rendition-blacklisted event was fired');
   assert.equal(retryplaylist, 0, 'haven\'t retried any playlist');
 
-  // request for the final available media
+  // request for the final media
   this.requests[2].respond(404);
   url = this.requests[2].url.slice(this.requests[2].url.lastIndexOf('/') + 1);
   media = this.player.tech_.hls.playlists.master.playlists[url];
 
-  // media wasn't blacklisted because it's final rendition
-  assert.ok(!media.excludeUntil, 'media not blacklisted after playlist 404');
-  assert.equal(this.env.log.warn.calls, 1, 'warning logged for blacklist');
-  assert.equal(this.env.log.warn.args[1],
-              'Problem encountered with the current HLS playlist. Trying again since it is the final playlist.',
-              'log specific error message for final playlist');
-  assert.equal(retryplaylist, 1, 'retried final playlist for once');
-  assert.equal(blacklistplaylist, 1, 'there is one blacklisted playlist');
-  assert.equal(hlsRenditionBlacklistedEvents, 1, 'an hls-rendition-blacklisted event was fired');
-
+  assert.ok(media.excludeUntil > 0, 'second media was blacklisted after playlist 404');
+  assert.equal(this.env.log.warn.calls, 2, 'warning logged for blacklist');
+  assert.equal(
+    this.env.log.warn.args[1],
+    'Removing all playlists from the blacklist because the last rendition is about to' +
+      ' be blacklisted.',
+    'logged error message');
+  assert.equal(
+    this.env.log.warn.args[2],
+    'Problem encountered with the current HLS playlist. HLS playlist request error at' +
+      ' URL: media1.m3u8. Switching to another playlist.',
+    'logged error message');
+  assert.equal(retryplaylist, 1, 'fired a retryplaylist event');
+  assert.equal(blacklistplaylist, 2, 'media1 is blacklisted');
   this.clock.tick(2 * 1000);
   // no new request was made since it hasn't been half the segment duration
   assert.strictEqual(3, this.requests.length, 'no new request was made');
 
   this.clock.tick(3 * 1000);
-  // continue loading the final remaining playlist after it wasn't blacklisted
-  // when half the segment duaration passed
+  // loading the first playlist since the blacklist duration was cleared when half the
+  // segment duaration passed
   assert.strictEqual(4, this.requests.length, 'one more request was made');
 
+  url = this.requests[3].url.slice(this.requests[3].url.lastIndexOf('/') + 1);
+  media = this.player.tech_.hls.playlists.master.playlists[url];
+   // the first media was unblacklisted after a refresh delay
+  assert.ok(!media.excludeUntil, 'removed first media from blacklist');
+
   assert.strictEqual(this.requests[3].url,
-                     absoluteUrl('manifest/media1.m3u8'),
+                     absoluteUrl('manifest/media.m3u8'),
                      'media playlist requested');
 
   // verify stats
@@ -1387,12 +1398,14 @@ QUnit.test('never blacklist the playlist if it is the only playlist', function(a
   this.requests.shift().respond(404);
   media = this.player.tech_.hls.playlists.media();
 
-  // media wasn't blacklisted because it's final rendition
+  // media wasn't blacklisted because it's the only rendition
   assert.ok(!media.excludeUntil, 'media was not blacklisted after playlist 404');
   assert.equal(this.env.log.warn.calls, 1, 'warning logged for blacklist');
-  assert.equal(this.env.log.warn.args[0],
-              'Problem encountered with the current HLS playlist. Trying again since it is the final playlist.',
-              'log specific error message for final playlist');
+  assert.equal(
+    this.env.log.warn.args[0],
+    'Problem encountered with the current HLS playlist. Trying again since it is the' +
+      ' only playlist.',
+    'logged warning message');
 });
 
 QUnit.test('error on the first playlist request does not trigger an error ' +
@@ -1414,12 +1427,14 @@ QUnit.test('error on the first playlist request does not trigger an error ' +
   let url = this.requests[1].url.slice(this.requests[1].url.lastIndexOf('/') + 1);
   let media = this.player.tech_.hls.playlists.master.playlists[url];
 
-  // media wasn't blacklisted because it's final rendition
+  // media wasn't blacklisted because it's the only rendition
   assert.ok(!media.excludeUntil, 'media was not blacklisted after playlist 404');
   assert.equal(this.env.log.warn.calls, 1, 'warning logged for blacklist');
-  assert.equal(this.env.log.warn.args[0],
-              'Problem encountered with the current HLS playlist. Trying again since it is the final playlist.',
-              'log specific error message for final playlist');
+  assert.equal(
+    this.env.log.warn.args[0],
+    'Problem encountered with the current HLS playlist. Trying again since it is the' +
+      ' only playlist.',
+    'logged error message');
 });
 
 QUnit.test('seeking in an empty playlist is a non-erroring noop', function(assert) {
@@ -1709,16 +1724,19 @@ QUnit.test('playlist blacklisting duration is set through options', function(ass
   media = this.player.tech_.hls.playlists.master.playlists[url];
   assert.ok(media.excludeUntil > 0, 'original media blacklisted for some time');
   assert.equal(this.env.log.warn.calls, 1, 'warning logged for blacklist');
-  assert.equal(this.env.log.warn.args[0],
-              'Problem encountered with the current HLS playlist. HLS playlist request error at URL: media.m3u8 Switching to another playlist.',
-              'log generic error message');
+  assert.equal(
+    this.env.log.warn.args[0],
+    'Problem encountered with the current HLS playlist. HLS playlist request error at' +
+      ' URL: media.m3u8. Switching to another playlist.',
+    'logged warning message');
+  // this takes one millisecond
+  this.standardXHRResponse(this.requests[2]);
 
-  this.clock.tick(2 * 60 * 1000);
+  this.clock.tick(2 * 60 * 1000 - 1);
   assert.ok(media.excludeUntil - Date.now() > 0, 'original media still be blacklisted');
 
   this.clock.tick(1 * 60 * 1000);
   assert.equal(media.excludeUntil, Date.now(), 'media\'s exclude time reach to the current time');
-  assert.equal(this.env.log.warn.calls, 3, 'warning logged for blacklist');
 
   videojs.options.hls = hlsOptions;
 });
