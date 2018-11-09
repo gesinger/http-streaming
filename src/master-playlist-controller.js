@@ -785,7 +785,11 @@ export class MasterPlaylistController extends videojs.EventTarget {
       videojs.log.warn('Removing all playlists from the blacklist because the last ' +
                        'rendition is about to be blacklisted.');
       playlists.forEach((playlist) => {
-        delete playlist.excludeUntil;
+        // Playlists that were excluded to Infinity were incompatible, and shouldn't be
+        // attempted.
+        if (playlist.excludeUntil !== Infinity) {
+          delete playlist.excludeUntil;
+        }
       });
       // Technically we are retrying a playlist, in that we are simply retrying a previous
       // playlist. This is needed for users relying on the retryplaylist event to catch a

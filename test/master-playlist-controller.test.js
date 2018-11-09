@@ -1448,6 +1448,84 @@ QUnit.test('blacklists playlist on earlyabort', function(assert) {
   videojs.log.warn = origWarn;
 });
 
+QUnit.test('clears temporary blacklist when last rendition errors and multiple renditions',
+function(assert) {
+  openMediaSource(this.player, this.clock);
+
+  this.player.tech_.hls.bandwidth = 20;
+
+  // master
+  this.requests.shift().respond(200, null,
+                                '#EXTM3U\n' +
+                                '#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="mp4a.40.2"\n' +
+                                'audio-only.m3u8\n' +
+                                '#EXT-X-STREAM-INF:BANDWIDTH=10,RESOLUTION=1x1\n' +
+                                'low.m3u8\n' +
+                                '#EXT-X-STREAM-INF:BANDWIDTH=100,RESOLUTION=10x10\n' +
+                                'mid.m3u8\n' +
+                                '#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=100x100\n' +
+                                'high.m3u8\n');
+  // media1
+  this.standardXHRResponse(this.requests.shift());
+
+  const audioOnlyPlaylist =
+    this.masterPlaylistController.masterPlaylistLoader_.master.playlists[0];
+  const lowMuxedPlaylist =
+    this.masterPlaylistController.masterPlaylistLoader_.master.playlists[1];
+  const midMuxedPlaylist =
+    this.masterPlaylistController.masterPlaylistLoader_.master.playlists[2];
+  const highMuxedPlaylist =
+    this.masterPlaylistController.masterPlaylistLoader_.master.playlists[3];
+
+  assert.equal(
+    audioOnlyPlaylist.excludeUntil, Infinity, 'excluded incompatible playlist forever');
+  assert.equal(
+    this.masterPlaylistController.masterPlaylistLoader_.media(),
+    lowMuxedPlaylist,
+    'selected video+audio');
+  assert.notOk(midMuxedPlaylist.excludeUntil, 'compatible playlist not blacklisted');
+  assert.notOk(highMuxedPlaylist.excludeUntil, 'compatible playlist not blacklisted');
+
+  midMuxedPlaylist.excludeUntil = Number.MAX_VALUE;
+  highMuxedPlaylist.excludeUntil = Number.MAX_VALUE;
+
+  this.masterPlaylistController.mainSegmentLoader_.trigger('error');
+
+  // since it's the final rendition, the media set is delayed
+  assert.equal(audioOnlyPlaylist.excludeUntil, Infinity, 'audio only playlist unchanged');
+  assert.equal(
+    this.masterPlaylistController.masterPlaylistLoader_.media(),
+    lowMuxedPlaylist,
+    'selected playlist unchanged');
+  assert.notOk(midMuxedPlaylist.excludeUntil, 'compatible playlist unblacklisted');
+  assert.notOk(highMuxedPlaylist.excludeUntil, 'compatible playlist unblacklisted');
+
+  // segment
+  assert.equal(this.requests.length, 1, 'one outstanding request');
+
+  this.clock.tick(5000);
+
+  // media2
+  assert.equal(this.requests.length, 2, 'one more request');
+  assert.equal(
+    this.requests[1].uri, midMuxedPlaylist.resolvedUri, 'requested next playlist');
+
+  // media2
+  this.standardXHRResponse(this.requests[1]);
+
+  assert.equal(
+    audioOnlyPlaylist.excludeUntil, Infinity, 'incompatible playlist still blacklisted');
+  assert.ok(lowMuxedPlaylist.excludeUntil, 'blacklisted currentl playlist');
+  assert.notOk(
+    midMuxedPlaylist.excludeUntil, 'unblacklisted temporarily blacklisted playlist');
+  assert.equal(
+    this.masterPlaylistController.masterPlaylistLoader_.media(),
+    midMuxedPlaylist,
+    'selected previously blacklisted playlist');
+  assert.notOk(
+    highMuxedPlaylist.excludeUntil, 'unblacklisted temporarily blacklisted playlist');
+});
+
 QUnit.test('does not get stuck in a loop due to inconsistent network/caching',
 function(assert) {
   /*

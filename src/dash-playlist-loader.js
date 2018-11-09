@@ -115,7 +115,20 @@ export default class DashPlaylistLoader extends EventTarget {
     }
   }
 
-  media(playlist) {
+   /**
+    * When called without any arguments, returns the currently
+    * active media playlist. When called with a single argument,
+    * triggers the playlist loader to asynchronously switch to the
+    * specified media playlist. Calling this method while the
+    * loader is in the HAVE_NOTHING causes an error to be emitted
+    * but otherwise has no effect.
+    *
+    * @param {Object=} playlist the parsed media playlist
+    * object to switch to
+    * @param {Boolean} shouldDelay whether or not to delay the media update
+    * @return {Playlist} the current loaded media
+    */
+  media(playlist, shouldDelay) {
     // getter
     if (!playlist) {
       return this.media_;
@@ -134,6 +147,14 @@ export default class DashPlaylistLoader extends EventTarget {
         throw new Error('Unknown playlist URI: ' + playlist);
       }
       playlist = this.master.playlists[playlist];
+    }
+
+    if (shouldDelay) {
+      const delay = (playlist.targetDuration / 2) * 1000 || 5 * 1000;
+
+      this.mediaUpdateTimeout =
+        window.setTimeout(this.media.bind(this, playlist, false), delay);
+      return;
     }
 
     const mediaChange = !this.media_ || playlist.uri !== this.media_.uri;
