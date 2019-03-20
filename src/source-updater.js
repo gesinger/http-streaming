@@ -26,7 +26,11 @@ const actions = {
     callback();
   },
   duration: (duration) => (sourceUpdater) => {
-    sourceUpdater.mediaSource.duration = duration;
+    try {
+      sourceUpdater.mediaSource.duration = duration;
+    } catch (e) {
+      videojs.log.warn('Failed to set media source duration', e);
+    }
   }
 };
 
@@ -256,6 +260,33 @@ export default class SourceUpdater extends videojs.EventTarget {
     });
   }
 
+  /********
+  -------
+  This chunk is related to https://github.com/videojs/http-streaming/pull/371
+  The interface here is different from the one above, as well
+  as how things are appended (pushqueue vs doing things on the sourcebuffer)
+  sall related calls will need to be modified as well.
+  -------
+   *
+   *
+  appendBuffer(config, done) {
+    this.processedAppend_ = true;
+    this.queueCallback_(() => {
+      if (config.videoSegmentTimingInfoCallback) {
+        this.sourceBuffer_.addEventListener(
+          'videoSegmentTimingInfo', config.videoSegmentTimingInfoCallback);
+      }
+      this.sourceBuffer_.appendBuffer(config.bytes);
+    }, () => {
+      if (config.videoSegmentTimingInfoCallback) {
+        this.sourceBuffer_.removeEventListener(
+          'videoSegmentTimingInfo', config.videoSegmentTimingInfoCallback);
+      }
+      done();
+    });
+  }
+  */
+
   audioBuffered() {
     return this.audioBuffer && this.audioBuffer.buffered ? this.audioBuffer.buffered :
       videojs.createTimeRange();
@@ -348,6 +379,16 @@ export default class SourceUpdater extends videojs.EventTarget {
       return true;
     }
     return false;
+
+    /* =========
+     * The above logic is on the TBA branch, the below was modified to deal with the 'ended`
+     * event issue
+     ===========
+    // we are updating if the sourcebuffer is updating or
+    return !this.sourceBuffer_ || this.sourceBuffer_.updating ||
+      // if we have a pending callback that is not our internal noop
+      (!!this.pendingCallback_ && this.pendingCallback_ !== noop);
+    */
   }
 
   /**
