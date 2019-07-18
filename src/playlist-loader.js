@@ -23,8 +23,8 @@ const { mergeOptions, EventTarget, log } = videojs;
  */
 export const forEachMediaGroup = (master, callback) => {
   ['AUDIO', 'SUBTITLES'].forEach((mediaType) => {
-    for (let groupKey in master.mediaGroups[mediaType]) {
-      for (let labelKey in master.mediaGroups[mediaType][groupKey]) {
+    for (const groupKey in master.mediaGroups[mediaType]) {
+      for (const labelKey in master.mediaGroups[mediaType][groupKey]) {
         const mediaProperties = master.mediaGroups[mediaType][groupKey][labelKey];
 
         callback(mediaProperties, mediaType, groupKey, labelKey);
@@ -40,7 +40,7 @@ export const forEachMediaGroup = (master, callback) => {
   *
   * @param {Array} original the outdated list of segments
   * @param {Array} update the updated list of segments
-  * @param {Number=} offset the index of the first update
+  * @param {number=} offset the index of the first update
   * segment in the original segment list. For non-live playlists,
   * this should always be zero and does not need to be
   * specified. For live playlists, it should be the difference
@@ -136,7 +136,7 @@ export const setupMediaPlaylists = (master) => {
   let i = master.playlists.length;
 
   while (i--) {
-    let playlist = master.playlists[i];
+    const playlist = master.playlists[i];
 
     master.playlists[playlist.uri] = playlist;
     playlist.resolvedUri = resolveUrl(master.uri, playlist.uri);
@@ -168,9 +168,9 @@ export const resolveMediaGroupUris = (master) => {
  *
  * @param {Object} media
  *        The current media
- * @param {Boolean} update
+ * @param {boolean} update
  *        True if there were any updates from the last refresh, false otherwise
- * @return {Number}
+ * @return {number}
  *         The time in ms to wait before refreshing the live playlist
  */
 export const refreshDelay = (media, update) => {
@@ -220,9 +220,9 @@ export const parseManifest = ({
  *
  * @class PlaylistLoader
  * @extends Stream
- * @param {String|Object} src url or object of manifest
- * @param {Boolean} withCredentials the withCredentials xhr option
- * @constructor
+ * @param {string|Object} src url or object of manifest
+ * @param {boolean} withCredentials the withCredentials xhr option
+ * @class
  */
 export default class PlaylistLoader extends EventTarget {
   constructor(src, hls, options = { }) {
@@ -266,8 +266,7 @@ export default class PlaylistLoader extends EventTarget {
         }
 
         if (error) {
-          return this.playlistRequestError(
-            this.request, this.media().uri, 'HAVE_METADATA');
+          return this.playlistRequestError(this.request, this.media().uri, 'HAVE_METADATA');
         }
 
         this.haveMetadata(this.request.responseText, this.media().uri);
@@ -286,7 +285,7 @@ export default class PlaylistLoader extends EventTarget {
     this.error = {
       playlist: this.master.playlists[url],
       status: xhr.status,
-      message: 'HLS playlist request error at URL: ' + url,
+      message: `HLS playlist request error at URL: ${url}.`,
       responseText: xhr.responseText,
       code: (xhr.status >= 500) ? 4 : 2
     };
@@ -347,12 +346,13 @@ export default class PlaylistLoader extends EventTarget {
     this.trigger('loadedplaylist');
   }
 
-   /**
+  /**
     * Abort any outstanding work and clean up.
     */
   dispose() {
     this.stopRequest();
     window.clearTimeout(this.mediaUpdateTimeout);
+    window.clearTimeout(this.finalRenditionTimeout);
   }
 
   stopRequest() {
@@ -365,7 +365,7 @@ export default class PlaylistLoader extends EventTarget {
     }
   }
 
-   /**
+  /**
     * When called without any arguments, returns the currently
     * active media playlist. When called with a single argument,
     * triggers the playlist loader to asynchronously switch to the
@@ -375,9 +375,11 @@ export default class PlaylistLoader extends EventTarget {
     *
     * @param {Object=} playlist the parsed media playlist
     * object to switch to
+    * @param {boolean=} is this the last available playlist
+    *
     * @return {Playlist} the current loaded media
     */
-  media(playlist) {
+  media(playlist, isFinalRendition) {
     // getter
     if (!playlist) {
       return this.media_;
@@ -388,8 +390,6 @@ export default class PlaylistLoader extends EventTarget {
       throw new Error('Cannot switch media playlist from ' + this.state);
     }
 
-    const startingState = this.state;
-
     // find the playlist object if the target playlist has been
     // specified by URI
     if (typeof playlist === 'string') {
@@ -399,6 +399,17 @@ export default class PlaylistLoader extends EventTarget {
       playlist = this.master.playlists[playlist];
     }
 
+    window.clearTimeout(this.finalRenditionTimeout);
+
+    if (isFinalRendition) {
+      const delay = (playlist.targetDuration / 2) * 1000 || 5 * 1000;
+
+      this.finalRenditionTimeout =
+        window.setTimeout(this.media.bind(this, playlist, false), delay);
+      return;
+    }
+
+    const startingState = this.state;
     const mediaChange = !this.media_ || playlist.uri !== this.media_.uri;
 
     // switch to fully loaded playlists immediately
@@ -564,7 +575,7 @@ export default class PlaylistLoader extends EventTarget {
       if (error) {
         this.error = {
           status: req.status,
-          message: 'HLS playlist request error at URL: ' + this.src,
+          message: `HLS playlist request error at URL: ${this.src}.`,
           responseText: req.responseText,
           // MEDIA_ERR_NETWORK
           code: 2

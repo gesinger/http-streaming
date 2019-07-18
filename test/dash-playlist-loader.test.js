@@ -1,13 +1,24 @@
 import QUnit from 'qunit';
 import sinon from 'sinon';
-import { default as DashPlaylistLoader, updateMaster } from '../src/dash-playlist-loader';
+import {
+  default as DashPlaylistLoader,
+  updateMaster,
+  requestSidx_,
+  generateSidxKey,
+  compareSidxEntry,
+  filterChangedSidxMappings,
+  parseMasterXml
+} from '../src/dash-playlist-loader';
 import xhrFactory from '../src/xhr';
 import {
   useFakeEnvironment,
   standardXHRResponse,
   urlTo
 } from './test-helpers';
-import testDataManifests from './test-manifests.js';
+// needed for plugin registration
+import '../src/videojs-http-streaming';
+import testDataManifests from './dist/test-manifests.js';
+import { sidx as sidxResponse } from './dist/test-segments';
 
 QUnit.module('DASH Playlist Loader: unit', {
   beforeEach(assert) {
@@ -292,7 +303,186 @@ QUnit.test('updateMaster: updates playlists and mediaGroups', function(assert) {
         }]
       }]
     },
-    'updates playlists and media groups');
+    'updates playlists and media groups'
+  );
+});
+
+QUnit.test('generateSidxKey: generates correct key', function(assert) {
+  const sidxInfo = {
+    byterange: {
+      offset: 1,
+      length: 5
+    },
+    uri: 'uri'
+  };
+
+  assert.strictEqual(
+    generateSidxKey(sidxInfo),
+    'uri-1-5',
+    'the key byterange should have a inclusive end'
+  );
+});
+
+QUnit.test('compareSidxEntry: will not add new sidx info to a mapping', function(assert) {
+  const playlists = {
+    0: {
+      sidx: {
+        byterange: {
+          offset: 0,
+          length: 10
+        },
+        uri: '0'
+      }
+    },
+    1: {
+      sidx: {
+        byterange: {
+          offset: 10,
+          length: 29
+        },
+        uri: '1'
+      }
+    }
+  };
+  const oldSidxMapping = {
+    '0-0-9': {
+      sidx: new Uint8Array(),
+      sidxInfo: playlists[0].sidx
+    }
+  };
+  const result = compareSidxEntry(playlists, oldSidxMapping);
+
+  assert.notOk(result['1-10-29'], 'new playlists are not returned');
+  assert.ok(result['0-0-9'], 'matching playlists are returned');
+  assert.strictEqual(Object.keys(result).length, 1, 'only one sidx');
+});
+
+QUnit.test('compareSidxEntry: will remove non-matching sidxes from a mapping', function(assert) {
+  const playlists = [
+    {
+      uri: '0',
+      sidx: {
+        byterange: {
+          offset: 0,
+          length: 10
+        }
+      }
+    }
+  ];
+  const oldSidxMapping = {
+    '0-0-9': {
+      sidx: new Uint8Array(),
+      sidxInfo: {
+        byterange: {
+          offset: 1,
+          length: 3
+        }
+      }
+    }
+  };
+  const result = compareSidxEntry(playlists, oldSidxMapping);
+
+  assert.strictEqual(Object.keys(result).length, 0, 'no sidxes in mapping');
+});
+
+QUnit.test('filterChangedSidxMappings: removes change sidx info from mapping', function(assert) {
+  const loader = new DashPlaylistLoader('dash-sidx.mpd', this.fakeHls);
+  let masterXml;
+
+  loader.load();
+  this.standardXHRResponse(this.requests.shift());
+  this.standardXHRResponse(this.requests.shift());
+  const childPlaylist = loader.master.mediaGroups.AUDIO.audio.en.playlists[0];
+
+  const childLoader = new DashPlaylistLoader(childPlaylist, this.fakeHls, false, loader);
+
+  childLoader.load();
+  this.clock.tick(1);
+  this.standardXHRResponse(this.requests.shift());
+
+  const oldSidxMapping = loader.sidxMapping_;
+  let newSidxMapping = filterChangedSidxMappings(
+    loader.masterXml_,
+    loader.srcUrl,
+    loader.clientOffset_,
+    loader.sidxMapping_
+  );
+
+  assert.deepEqual(
+    newSidxMapping,
+    oldSidxMapping,
+    'if no sidx info changed, return the same object'
+  );
+  const playlists = loader.master.playlists;
+  const oldVideoKey = generateSidxKey(playlists['placeholder-uri-0'].sidx);
+  const oldAudioEnKey = generateSidxKey(playlists['placeholder-uri-AUDIO-audio-en'].sidx);
+
+  // should change the video playlist
+  masterXml = loader.masterXml_.replace(/(indexRange)=\"\d+-\d+\"/, '$1="201-400"');
+  newSidxMapping = filterChangedSidxMappings(
+    masterXml,
+    loader.srcUrl,
+    loader.clientOffset_,
+    loader.sidxMapping_
+  );
+  const newVideoKey = `${playlists['placeholder-uri-0'].sidx.uri}-201-400`;
+
+  assert.notOk(
+    newSidxMapping[oldVideoKey],
+    'old video playlist mapping is not returned'
+  );
+  assert.notOk(
+    newSidxMapping[newVideoKey],
+    'new video playlists are not returned'
+  );
+  assert.ok(
+    newSidxMapping[oldAudioEnKey],
+    'audio group mapping is returned as it is unchanged'
+  );
+
+  // should change the English audio group
+  masterXml = masterXml.replace(/(indexRange)=\"\d+-\d+\"/g, '$1="201-400"');
+  newSidxMapping = filterChangedSidxMappings(
+    masterXml,
+    loader.srcUrl,
+    loader.clientOffset_,
+    loader.sidxMapping_
+  );
+  assert.notOk(
+    newSidxMapping[oldAudioEnKey],
+    'audio group English is removed'
+  );
+});
+
+QUnit.test('requestSidx_: creates an XHR request for a sidx range', function(assert) {
+  const sidxInfo = {
+    resolvedUri: 'sidx.mp4',
+    byterange: {
+      offset: 0,
+      length: 10
+    }
+  };
+  const playlist = {
+    uri: 'fakeplaylist',
+    segments: [sidxInfo],
+    sidx: sidxInfo
+  };
+  const callback = sinon.stub();
+  const request = requestSidx_(
+    sidxInfo,
+    playlist,
+    this.fakeHls.xhr,
+    { handleManifestRedirects: false },
+    callback
+  );
+
+  assert.ok(request, 'a request was returned');
+  assert.strictEqual(request.headers.Range, 'bytes=0-9', 'byterange is correctly requested');
+  assert.strictEqual(request.uri, sidxInfo.resolvedUri, 'uri requested is correct');
+  assert.strictEqual(this.requests.length, 1, 'one xhr request');
+
+  this.standardXHRResponse(this.requests.shift());
+  assert.strictEqual(callback.callCount, 1, 'callback was called');
 });
 
 QUnit.test('constructor throws if the playlist url is empty or undefined', function(assert) {
@@ -318,9 +508,28 @@ QUnit.test('constructor sets srcUrl and other properties', function(assert) {
   assert.strictEqual(childLoader.state, 'HAVE_NOTHING', 'correct state');
   assert.deepEqual(childLoader.loadedPlaylists_, {}, 'correct loadedPlaylist state');
   assert.ok(childLoader.masterPlaylistLoader_, 'should be a masterPlaylistLoader');
-  assert.deepEqual(childLoader.childPlaylist_, {},
-    'should be a childPlaylist_');
+  assert.deepEqual(
+    childLoader.childPlaylist_, {},
+    'should be a childPlaylist_'
+  );
   assert.notOk(childLoader.srcUrl, 'should be no srcUrl');
+});
+
+QUnit.test('dispose: aborts pending manifest request', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+
+  loader.load();
+  this.clock.tick(1);
+  assert.equal(this.requests.length, 1, 'one request');
+  assert.notOk(this.requests[0].aborted, 'request not aborted');
+  assert.ok(this.requests[0].onreadystatechange, 'onreadystatechange handler exists');
+  loader.dispose();
+  assert.equal(this.requests.length, 1, 'one request');
+  assert.ok(this.requests[0].aborted, 'request aborted');
+  assert.notOk(
+    this.requests[0].onreadystatechange,
+    'onreadystatechange handler does not exist'
+  );
 });
 
 QUnit.test('load: will start an unstarted loader', function(assert) {
@@ -507,7 +716,45 @@ QUnit.test('media: errors if called in incorrect state', function(assert) {
 });
 
 QUnit.test('media: setting media causes an asynchronous action', function(assert) {
-  // TODO
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const origHasPendingRequest = loader.hasPendingRequest;
+  let loadedPlaylists = 0;
+  let loadedMetadata = 0;
+
+  loader.on(['loadedplaylist', 'loadedmetadata'], (e) => {
+    if (e.type === 'loadedplaylist') {
+      loadedPlaylists++;
+    } else if (e.type === 'loadedmetadata') {
+      loadedMetadata++;
+    }
+  });
+
+  // setup loader
+  loader.load();
+  // pretend there's a pending media request so
+  // media isn't selected automatically
+  loader.hasPendingRequest = () => true;
+  this.standardXHRResponse(this.requests.shift());
+  loader.hasPendingRequest = origHasPendingRequest;
+
+  assert.strictEqual(loader.state, 'HAVE_MASTER', 'correct state before media call');
+  assert.strictEqual(loadedPlaylists, 1, 'one loadedplaylist before media is loaded');
+  assert.strictEqual(loadedMetadata, 0, 'no loadedmetadata before media is loaded');
+  assert.notOk(loader.hasPendingRequest(), 'no pending asynchronous actions');
+
+  // set initial media
+  loader.media(loader.master.playlists[0]);
+  assert.ok(loader.hasPendingRequest(), 'has asynchronous action pending');
+  assert.strictEqual(loader.state, 'HAVE_MASTER', 'state is still HAVE_MASTER');
+  assert.strictEqual(loadedPlaylists, 1, 'still one loadedplaylist');
+  assert.strictEqual(loadedMetadata, 0, 'still no loadedmetadata');
+
+  // runs any pending async actions
+  this.clock.tick(0);
+  assert.notOk(loader.hasPendingRequest(), 'no asynchronous action pending');
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'state is now HAVE_METADATA');
+  assert.strictEqual(loadedPlaylists, 2, 'two loadedplaylist');
+  assert.strictEqual(loadedMetadata, 1, 'one loadedmetadata');
 });
 
 QUnit.test('media: sets initial media playlist on master loader', function(assert) {
@@ -732,8 +979,10 @@ QUnit.test('media: switches to a previously loaded playlist immediately', functi
   );
   assert.strictEqual(loader.state, 'HAVE_METADATA', 'state should be HAVE_METADATA');
   assert.strictEqual(loadedPlaylists, 3, '3 loadedplaylists');
-  assert.strictEqual(loadedMetadata, 1,
-    'still one loadedmetadata since this is a loadedPlaylist');
+  assert.strictEqual(
+    loadedMetadata, 1,
+    'still one loadedmetadata since this is a loadedPlaylist'
+  );
   assert.strictEqual(mediaChange, 2, 'two mediachanges');
   assert.strictEqual(mediaChanging, 2, 'two mediachangings');
 });
@@ -902,13 +1151,55 @@ QUnit.test('haveMetadata: triggers mediachange if new selection', function(asser
   assert.strictEqual(mediaChangings, 0, 'no mediachanging');
 });
 
+QUnit.test('haveMaster: triggers loadedplaylist for loader', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const origMediaFn = loader.media;
+  let loadedPlaylists = 0;
+
+  loader.on('loadedplaylist', () => {
+    loadedPlaylists++;
+  });
+
+  // fake already having master XML loaded
+  loader.masterXml_ = testDataManifests.dash;
+  loader.haveMaster_();
+  assert.strictEqual(loadedPlaylists, 1, 'one loadedplaylist triggered');
+
+  loader.media = origMediaFn;
+});
+
+QUnit.test('haveMaster: sets media on child loader', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+
+  loader.load();
+  this.standardXHRResponse(this.requests.shift());
+  const childPlaylist = loader.master.playlists['placeholder-uri-AUDIO-audio-main'];
+  const childLoader = new DashPlaylistLoader(childPlaylist, this.fakeHls, false, loader);
+
+  const mediaStub = sinon.stub(childLoader, 'media');
+
+  childLoader.haveMaster_();
+  assert.strictEqual(mediaStub.callCount, 1, 'calls media on childLoader');
+  assert.deepEqual(
+    mediaStub.getCall(0).args[0],
+    childPlaylist,
+    'sets media to passed in playlist object'
+  );
+});
+
 QUnit.test('parseMasterXml: setup phony playlists and resolves uris', function(assert) {
   const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
   loader.load();
   this.standardXHRResponse(this.requests.shift());
 
-  const masterPlaylist = loader.parseMasterXml();
+  // TODO
+  const masterPlaylist = parseMasterXml({
+    masterXml: loader.masterXml_,
+    srcUrl: loader.srcUrl,
+    clientOffset: loader.clientOffset_,
+    sidxMapping: loader.sidxMapping_
+  });
 
   assert.strictEqual(masterPlaylist.uri, loader.srcUrl, 'master playlist uri set correctly');
   assert.strictEqual(masterPlaylist.playlists[0].uri, 'placeholder-uri-0');
@@ -922,6 +1213,77 @@ QUnit.test('parseMasterXml: setup phony playlists and resolves uris', function(a
     'has audio group'
   );
   assert.ok(masterPlaylist.playlists[0].resolvedUri, 'resolved playlist uris');
+});
+
+QUnit.test('parseMasterXml: includes sidx info if available and matches playlist', function(assert) {
+  const loader = new DashPlaylistLoader('dash-sidx.mpd', this.fakeHls);
+
+  loader.load();
+  this.standardXHRResponse(this.requests.shift());
+  // TODO
+  const origParsedMaster = parseMasterXml({
+    masterXml: loader.masterXml_,
+    srcUrl: loader.srcUrl,
+    clientOffset: loader.clientOffset_,
+    sidxMapping: loader.sidxMapping_
+  });
+
+  loader.sidxMapping_ = {};
+
+  // TODO
+  let newMaster = parseMasterXml({
+    masterXml: loader.masterXml_,
+    srcUrl: loader.srcUrl,
+    clientOffset: loader.clientOffset_,
+    sidxMapping: loader.sidxMapping_
+  });
+
+  assert.deepEqual(
+    newMaster,
+    origParsedMaster,
+    'empty sidxMapping will not affect master xml parsing'
+  );
+
+  // Allow sidx request to finish
+  this.standardXHRResponse(this.requests.shift());
+  const key = generateSidxKey(loader.media().sidx);
+
+  loader.sidxMapping_[key] = {
+    sidxInfo: loader.media().sidx,
+    sidx: {
+      timescale: 90000,
+      firstOffset: 0,
+      references: [{
+        referenceType: 0,
+        referencedSize: 10,
+        subSegmentDuration: 90000
+      }]
+    }
+  };
+  // TODO
+  newMaster = parseMasterXml({
+    masterXml: loader.masterXml_,
+    srcUrl: loader.srcUrl,
+    clientOffset: loader.clientOffset_,
+    sidxMapping: loader.sidxMapping_
+  });
+
+  assert.deepEqual(
+    newMaster.playlists[0].segments[0].byterange,
+    {
+      length: 10,
+      offset: 400
+    },
+    'byte range from sidx is applied to playlist segment'
+  );
+  assert.deepEqual(
+    newMaster.playlists[0].segments[0].map.byterange,
+    {
+      length: 200,
+      offset: 0
+    },
+    'init segment is included in updated segment'
+  );
 });
 
 QUnit.test('refreshMedia: updates master and media playlists for master loader', function(assert) {
@@ -952,15 +1314,14 @@ QUnit.test('refreshMedia: updates master and media playlists for master loader',
   const newMasterXml = testDataManifests['dash-live'];
 
   loader.masterXml_ = newMasterXml;
-  loader.refreshMedia_();
+  loader.refreshMedia_(loader.media().uri);
 
   assert.notEqual(loader.master, oldMaster, 'new master set');
   assert.strictEqual(loadedPlaylists, 1, 'one loadedplaylist');
   assert.strictEqual(playlistUnchanged, 0, 'no playlistunchanged');
 });
 
-QUnit.test(
-  'refreshMedia: triggers playlistunchanged for master loader' +
+QUnit.test('refreshMedia: triggers playlistunchanged for master loader' +
   ' if master stays the same', function(assert) {
   const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
   let loadedPlaylists = 0;
@@ -985,14 +1346,13 @@ QUnit.test(
     playlistUnchanged++;
   });
 
-  loader.refreshMedia_();
+  loader.refreshMedia_(loader.media().uri);
   assert.strictEqual(loadedPlaylists, 1, 'one loadedplaylists');
   assert.strictEqual(playlistUnchanged, 1, 'one playlistunchanged');
 });
 
 QUnit.test('refreshMedia: updates master and media playlists for child loader', function(assert) {
   const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
-  let childLoader;
   let loadedPlaylists = 0;
   let playlistUnchanged = 0;
 
@@ -1000,7 +1360,8 @@ QUnit.test('refreshMedia: updates master and media playlists for child loader', 
   this.standardXHRResponse(this.requests.shift());
   loader.media(loader.master.playlists[0]);
   this.clock.tick(1);
-  childLoader = new DashPlaylistLoader(loader.master.playlists[0], this.fakeHls, false, loader);
+  const childLoader = new DashPlaylistLoader(loader.master.playlists[0], this.fakeHls, false, loader);
+
   childLoader.load();
   this.clock.tick(1);
 
@@ -1020,18 +1381,16 @@ QUnit.test('refreshMedia: updates master and media playlists for child loader', 
   const newMasterXml = testDataManifests['dash-live'];
 
   loader.masterXml_ = newMasterXml;
-  childLoader.refreshMedia_();
+  childLoader.refreshMedia_(loader.media().uri);
 
   assert.notEqual(loader.master, oldMaster, 'new master set on master loader');
   assert.strictEqual(loadedPlaylists, 1, 'one loadedplaylist');
   assert.strictEqual(playlistUnchanged, 0, 'no playlistunchanged');
 });
 
-QUnit.test(
-  'refreshMedia: triggers playlistunchanged for child loader' +
+QUnit.test('refreshMedia: triggers playlistunchanged for child loader' +
   ' if master stays the same', function(assert) {
   const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
-  let childLoader;
   let loadedPlaylists = 0;
   let playlistUnchanged = 0;
 
@@ -1039,7 +1398,8 @@ QUnit.test(
   this.standardXHRResponse(this.requests.shift());
   loader.media(loader.master.playlists[0]);
   this.clock.tick(1);
-  childLoader = new DashPlaylistLoader(loader.master.playlists[0], this.fakeHls, false, loader);
+  const childLoader = new DashPlaylistLoader(loader.master.playlists[0], this.fakeHls, false, loader);
+
   childLoader.load();
   this.clock.tick(1);
 
@@ -1055,10 +1415,260 @@ QUnit.test(
     playlistUnchanged++;
   });
 
-  childLoader.refreshMedia_();
+  childLoader.refreshMedia_(loader.media().uri);
 
   assert.strictEqual(loadedPlaylists, 1, 'one loadedplaylist');
   assert.strictEqual(playlistUnchanged, 1, 'one playlistunchanged');
+});
+
+QUnit.test('refreshXml_: re-requests the MPD', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+
+  assert.strictEqual(this.requests.length, 0, 'no requests');
+  loader.refreshXml_();
+  assert.strictEqual(this.requests.length, 1, 'made a request');
+  const spy = sinon.spy(loader, 'refreshXml_');
+
+  loader.trigger('minimumUpdatePeriod');
+  assert.strictEqual(this.requests.length, 2, 'minimumUpdatePeriod event make a request');
+  assert.strictEqual(spy.callCount, 1, 'refreshXml_ was called due to minimumUpdatePeriod event');
+});
+
+QUnit.test('refreshXml_: requests the sidx if it changed', function(assert) {
+  const loader = new DashPlaylistLoader('dash-sidx.mpd', this.fakeHls);
+
+  loader.load();
+  // initial manifest
+  this.standardXHRResponse(this.requests.shift());
+  // child playlist
+  this.standardXHRResponse(this.requests.shift());
+
+  // TODO
+  const oldMaster = parseMasterXml({
+    masterXml: loader.masterXml_,
+    srcUrl: loader.srcUrl,
+    clientOffset: loader.clientOffset_,
+    sidxMapping: loader.sidxMapping_
+  });
+  const newMasterXml = loader.masterXml_.replace(/(indexRange)=\"\d+-\d+\"/g, '$1="400-599"');
+
+  loader.masterXml_ = newMasterXml;
+  assert.deepEqual(
+    oldMaster.playlists[0].sidx.byterange, {
+      offset: 200,
+      length: 200
+    },
+    'sidx is the original in the xml'
+  );
+  // TODO
+  let parsedMaster = parseMasterXml({
+    masterXml: loader.masterXml_,
+    srcUrl: loader.srcUrl,
+    clientOffset: loader.clientOffset_,
+    sidxMapping: loader.sidxMapping_
+  });
+
+  assert.notEqual(
+    parsedMaster.playlists[0].sidx.byterange.offset,
+    oldMaster.playlists[0].sidx.byterange.offset,
+    'the sidx has been changed'
+  );
+  loader.refreshXml_();
+
+  assert.strictEqual(this.requests.length, 1, 'manifest is being requested');
+  // TODO
+  parsedMaster = parseMasterXml({
+    masterXml: loader.masterXml_,
+    srcUrl: loader.srcUrl,
+    clientOffset: loader.clientOffset_,
+    sidxMapping: loader.sidxMapping_
+  });
+  assert.deepEqual(
+    parsedMaster.playlists[0].sidx.byterange,
+    {
+      offset: 400,
+      length: 200
+    },
+    'the sidx byterange has changed to reflect the new manifest'
+  );
+});
+
+QUnit.test('sidxRequestFinished_: updates master with sidx information', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const fakePlaylist = {
+    segments: [],
+    uri: 'fakeplaylist',
+    sidx: {
+      byterange: {
+        offset: 0,
+        length: sidxResponse().byteLength
+      },
+      resolvedUri: 'sidx.mp4'
+    }
+  };
+  const fakeMaster = {
+    playlists: {
+      0: fakePlaylist,
+      fakeplaylist: fakePlaylist
+    }
+  };
+  const stubDone = sinon.stub();
+  const handleSidxResponse = loader.sidxRequestFinished_(fakePlaylist, fakeMaster, 'HAVE_MASTER', stubDone);
+  const fakeRequest = {
+    response: sidxResponse()
+  };
+
+  // fake the loader active request for sidx
+  loader.request = true;
+  handleSidxResponse(null, fakeRequest);
+  assert.strictEqual(stubDone.callCount, 1, 'callback was called');
+  assert.ok(
+    stubDone.getCall(0).args[0].playlists,
+    'returned master playlist object'
+  );
+  assert.ok(
+    stubDone.getCall(0).args[1].references,
+    'returned a parsed sidx box'
+  );
+  assert.strictEqual(
+    stubDone.getCall(0).args[1].references[0].referencedSize,
+    13001,
+    'sidx box returned has been parsed'
+  );
+});
+
+QUnit.test('sidxRequestFinished_: errors if request for sidx fails', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const fakePlaylist = {
+    segments: [{
+      uri: 'fake-segment',
+      duration: 15360
+    }],
+    uri: 'fakeplaylist',
+    sidx: {
+      byterange: {
+        offset: 0,
+        length: sidxResponse().byteLength
+      },
+      resolvedUri: 'sidx.mp4'
+    }
+  };
+  const fakeMaster = {
+    playlists: {
+      0: fakePlaylist,
+      fakeplaylist: fakePlaylist
+    }
+  };
+  const stubDone = sinon.stub();
+  const handleSidxResponse = loader.sidxRequestFinished_(fakePlaylist, fakeMaster, 'HAVE_MASTER', stubDone);
+  const fakeRequest = {
+    response: 'fake error msg',
+    status: 400
+  };
+  let errors = 0;
+
+  loader.on('error', () => {
+    errors++;
+  });
+
+  // fake xhr request being active
+  loader.request = true;
+  handleSidxResponse(true, fakeRequest);
+  assert.strictEqual(loader.state, 'HAVE_MASTER', 'state is returned to state passed in');
+  assert.deepEqual(
+    loader.error,
+    {
+      status: fakeRequest.status,
+      message: 'DASH playlist request error at URL: fakeplaylist',
+      response: fakeRequest.response,
+      code: 2
+    },
+    'error object is filled out correctly'
+  );
+  assert.strictEqual(errors, 1, 'triggered an error event');
+});
+
+QUnit.test('setupChildLoader: sets masterPlaylistLoader and ' +
+  'playlist on child loader', function(assert) {
+  const fakePlaylist = { uri: 'fakeplaylist1' };
+  const newPlaylist = { uri: 'fakeplaylist2' };
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const newLoader = new DashPlaylistLoader('dash-sidx.mpd', this.fakeHls);
+  const childLoader = new DashPlaylistLoader(fakePlaylist, this.fakeHls, false, loader);
+
+  assert.deepEqual(
+    childLoader.masterPlaylistLoader_,
+    loader,
+    'starts with loader passed into constructor'
+  );
+  assert.deepEqual(
+    childLoader.childPlaylist_,
+    fakePlaylist,
+    'starts with playlist passed in constructor'
+  );
+
+  childLoader.setupChildLoader(newLoader, newPlaylist);
+  assert.deepEqual(
+    childLoader.masterPlaylistLoader_,
+    newLoader,
+    'masterPlaylistLoader correctly set'
+  );
+  assert.deepEqual(
+    childLoader.childPlaylist_,
+    newPlaylist,
+    'child playlist correctly set'
+  );
+});
+
+QUnit.test('hasPendingRequest: returns true if async code is running in master loader', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+
+  assert.notOk(loader.hasPendingRequest(), 'no requests on construction');
+
+  loader.load();
+  assert.ok(loader.hasPendingRequest(), 'should make a request after loading');
+  assert.ok(loader.request, 'xhr request is being made');
+
+  this.standardXHRResponse(this.requests.shift());
+  assert.notOk(loader.hasPendingRequest(), 'no pending request before setting media');
+
+  loader.media(loader.master.playlists[1]);
+  assert.ok(loader.hasPendingRequest(), 'pending request while loading media playlist');
+  assert.ok(loader.mediaRequest_, 'media request is being made');
+  assert.notOk(loader.request, 'xhr request is not being made');
+
+  this.clock.tick(1);
+  assert.ok(loader.state, 'HAVE_METADATA', 'in HAVE_METADATA state once media is loaded');
+  assert.notOk(loader.hasPendingRequest(), 'no pending request once media is loaded');
+});
+
+QUnit.test('hasPendingRequest: returns true if async code is running in child loader', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+
+  loader.load();
+  this.standardXHRResponse(this.requests.shift());
+  const childPlaylist = loader.master.playlists['placeholder-uri-AUDIO-audio-main'];
+  const childLoader = new DashPlaylistLoader(childPlaylist, this.fakeHls, false, loader);
+
+  assert.notOk(childLoader.hasPendingRequest(), 'no pending requests on construction');
+
+  childLoader.load();
+  assert.ok(childLoader.hasPendingRequest(), 'pending request while loading master playlist');
+  assert.ok(childLoader.mediaRequest_, 'media request is being made');
+  assert.notOk(childLoader.request, 'xhr request is not being made');
+
+  // this starts a request for the media playlist
+  childLoader.haveMaster_();
+  assert.ok(childLoader.hasPendingRequest(), 'pending request while loading media playlist');
+  assert.ok(childLoader.mediaRequest_, 'media request is being made');
+  assert.notOk(childLoader.request, 'xhr request is not being made');
+
+  childLoader.haveMetadata({
+    startingState: 'HAVE_MASTER',
+    playlist: childLoader.childPlaylist_
+  });
+  assert.strictEqual(childLoader.state, 'HAVE_METADATA', 'state is in HAVE_METADATA');
+  assert.notOk(childLoader.hasPendingRequest(), 'no pending requests once media is loaded');
 });
 
 QUnit.module('DASH Playlist Loader: functional', {
@@ -1084,7 +1694,7 @@ QUnit.module('DASH Playlist Loader: functional', {
 });
 
 QUnit.test('requests the manifest immediately when given a URL', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
   loader.load();
   assert.equal(this.requests.length, 1, 'made a request');
@@ -1092,11 +1702,11 @@ QUnit.test('requests the manifest immediately when given a URL', function(assert
 });
 
 QUnit.test('redirect manifest request when handleManifestRedirects is true', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls, { handleManifestRedirects: true });
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls, { handleManifestRedirects: true });
 
   loader.load();
 
-  let modifiedRequest = this.requests.shift();
+  const modifiedRequest = this.requests.shift();
 
   modifiedRequest.responseURL = 'http://differenturi.com/test.mpd';
 
@@ -1106,16 +1716,16 @@ QUnit.test('redirect manifest request when handleManifestRedirects is true', fun
 });
 
 QUnit.test('redirect src request when handleManifestRedirects is true', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls, { handleManifestRedirects: true });
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls, { handleManifestRedirects: true });
 
   loader.load();
 
-  let modifiedRequest = this.requests.shift();
+  const modifiedRequest = this.requests.shift();
 
   modifiedRequest.responseURL = 'http://differenturi.com/test.mpd';
   this.standardXHRResponse(modifiedRequest);
 
-  let childLoader = new DashPlaylistLoader(loader.master.playlists['placeholder-uri-0'], this.fakeHls, false, loader);
+  const childLoader = new DashPlaylistLoader(loader.master.playlists['placeholder-uri-0'], this.fakeHls, false, loader);
 
   childLoader.load();
   this.clock.tick(1);
@@ -1124,11 +1734,11 @@ QUnit.test('redirect src request when handleManifestRedirects is true', function
 });
 
 QUnit.test('do not redirect src request when handleManifestRedirects is not set', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
   loader.load();
 
-  let modifiedRequest = this.requests.shift();
+  const modifiedRequest = this.requests.shift();
 
   modifiedRequest.responseURL = 'http://differenturi.com/test.mpd';
 
@@ -1138,7 +1748,7 @@ QUnit.test('do not redirect src request when handleManifestRedirects is not set'
 });
 
 QUnit.test('starts without any metadata', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
   assert.notOk(loader.started, 'not started');
 
@@ -1186,8 +1796,10 @@ QUnit.test('moves to HAVE_METADATA after loading a media playlist', function(ass
   this.standardXHRResponse(this.requests.shift());
   assert.strictEqual(loadedPlaylist, 1, 'fired loadedplaylist once');
   assert.strictEqual(loadedMetadata, 0, 'fired loadedmetadata once');
-  assert.strictEqual(loader.state, 'HAVE_MASTER',
-    'the loader state is correct before setting the media');
+  assert.strictEqual(
+    loader.state, 'HAVE_MASTER',
+    'the loader state is correct before setting the media'
+  );
   assert.ok(loader.master, 'sets the master playlist');
   assert.strictEqual(this.requests.length, 0, 'no further requests are needed');
   loader.hasPendingRequest = origHasPendingRequest;
@@ -1207,13 +1819,11 @@ QUnit.test('child loader moves to HAVE_METADATA when initialized with a master p
   const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
   let loadedPlaylist = 0;
   let loadedMetadata = 0;
-  let childLoader;
-  let playlist;
 
   loader.load();
   this.standardXHRResponse(this.requests.shift());
-  playlist = loader.master.playlists['placeholder-uri-AUDIO-audio-main'];
-  childLoader = new DashPlaylistLoader(playlist, this.fakeHls, false, loader);
+  const playlist = loader.master.playlists['placeholder-uri-AUDIO-audio-main'];
+  const childLoader = new DashPlaylistLoader(playlist, this.fakeHls, false, loader);
 
   childLoader.on('loadedplaylist', function() {
     loadedPlaylist++;
@@ -1242,13 +1852,11 @@ QUnit.test('child playlist moves to HAVE_METADATA when initialized with a live m
   const loader = new DashPlaylistLoader('dash-live.mpd', this.fakeHls);
   let loadedPlaylist = 0;
   let loadedMetadata = 0;
-  let childLoader;
-  let playlist;
 
   loader.load();
   this.standardXHRResponse(this.requests.shift());
-  playlist = loader.master.playlists['placeholder-uri-AUDIO-audio-main'];
-  childLoader = new DashPlaylistLoader(playlist, this.fakeHls, false, loader);
+  const playlist = loader.master.playlists['placeholder-uri-AUDIO-audio-main'];
+  const childLoader = new DashPlaylistLoader(playlist, this.fakeHls, false, loader);
 
   childLoader.on('loadedplaylist', function() {
     loadedPlaylist++;
@@ -1274,7 +1882,7 @@ QUnit.test('child playlist moves to HAVE_METADATA when initialized with a live m
 });
 
 QUnit.test('returns to HAVE_METADATA after refreshing the playlist', function(assert) {
-  let loader = new DashPlaylistLoader('dash-live.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash-live.mpd', this.fakeHls);
 
   loader.load();
   this.standardXHRResponse(this.requests.shift());
@@ -1288,6 +1896,8 @@ QUnit.test('returns to HAVE_METADATA after refreshing the playlist', function(as
 });
 
 QUnit.test('triggers an event when the active media changes', function(assert) {
+  // NOTE: this test relies upon calls to media behaving as though they are
+  // asynchronous operations.
   const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
   const origHasPendingRequest = loader.hasPendingRequest;
   let mediaChanges = 0;
@@ -1351,8 +1961,8 @@ QUnit.test('triggers an event when the active media changes', function(assert) {
 });
 
 QUnit.test('throws an error when initial manifest request fails', function(assert) {
-  let errors = [];
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const errors = [];
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
   loader.load();
   this.clock.tick(1);
@@ -1367,7 +1977,7 @@ QUnit.test('throws an error when initial manifest request fails', function(asser
 });
 
 QUnit.test('throws an error if a media switch is initiated too early', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
   loader.load();
   this.clock.tick(1);
@@ -1377,24 +1987,27 @@ QUnit.test('throws an error if a media switch is initiated too early', function(
       loader.media('1080p');
     },
     new Error('Cannot switch media playlist from HAVE_NOTHING'),
-    'threw an error from HAVE_NOTHING');
+    'threw an error from HAVE_NOTHING'
+  );
 });
 
-QUnit.test('throws an error if a switch to an unrecognized playlist is requested',
-function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+QUnit.test(
+  'throws an error if a switch to an unrecognized playlist is requested',
+  function(assert) {
+    const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
-  loader.load();
-  this.standardXHRResponse(this.requests.shift());
+    loader.load();
+    this.standardXHRResponse(this.requests.shift());
 
-  assert.throws(function() {
-    loader.media('unrecognized');
-  }, new Error('Unknown playlist URI: unrecognized'), 'throws an error');
-});
+    assert.throws(function() {
+      loader.media('unrecognized');
+    }, new Error('Unknown playlist URI: unrecognized'), 'throws an error');
+  }
+);
 
 QUnit.test('can switch playlists after the master is downloaded', function(assert) {
   const clock = this.clock;
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
   loader.load();
 
@@ -1409,7 +2022,7 @@ QUnit.test('can switch playlists after the master is downloaded', function(asser
 });
 
 QUnit.test('can switch playlists based on object or URI', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
   loader.load();
   this.standardXHRResponse(this.requests.shift());
@@ -1427,23 +2040,8 @@ QUnit.test('can switch playlists based on object or URI', function(assert) {
   assert.equal(loader.media().uri, 'placeholder-uri-0', 'changed to playlist by object');
 });
 
-QUnit.test('dispose aborts pending manifest request', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
-
-  loader.load();
-  this.clock.tick(1);
-  assert.equal(this.requests.length, 1, 'one request');
-  assert.notOk(this.requests[0].aborted, 'request not aborted');
-  assert.ok(this.requests[0].onreadystatechange, 'onreadystatechange handler exists');
-  loader.dispose();
-  assert.equal(this.requests.length, 1, 'one request');
-  assert.ok(this.requests[0].aborted, 'request aborted');
-  assert.notOk(this.requests[0].onreadystatechange,
-               'onreadystatechange handler does not exist');
-});
-
 QUnit.test('errors if requests take longer than 45s', function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
   let errors = 0;
 
   loader.load();
@@ -1458,31 +2056,45 @@ QUnit.test('errors if requests take longer than 45s', function(assert) {
   assert.strictEqual(loader.error.code, 2, 'fired a network error');
 });
 
-QUnit.test('parseMasterXml parses master manifest and sets up uri references',
-function(assert) {
-  let loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+QUnit.test(
+  'parseMasterXml parses master manifest and sets up uri references',
+  function(assert) {
+    const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
 
-  loader.load();
+    loader.load();
 
-  this.standardXHRResponse(this.requests.shift());
+    this.standardXHRResponse(this.requests.shift());
 
-  assert.equal(loader.master.playlists[0].uri, 'placeholder-uri-0',
-    'setup phony uri for media playlist');
-  assert.strictEqual(loader.master.playlists['placeholder-uri-0'],
-    loader.master.playlists[0], 'set reference by uri for easy access');
-  assert.equal(loader.master.playlists[1].uri, 'placeholder-uri-1',
-    'setup phony uri for media playlist');
-  assert.strictEqual(loader.master.playlists['placeholder-uri-1'],
-    loader.master.playlists[1], 'set reference by uri for easy access');
-  assert.equal(loader.master.mediaGroups.AUDIO.audio.main.playlists[0].uri,
-    'placeholder-uri-AUDIO-audio-main', 'setup phony uri for media groups');
-  assert.strictEqual(loader.master.playlists['placeholder-uri-AUDIO-audio-main'],
-    loader.master.mediaGroups.AUDIO.audio.main.playlists[0],
-    'set reference by uri for easy access');
-});
+    assert.equal(
+      loader.master.playlists[0].uri, 'placeholder-uri-0',
+      'setup phony uri for media playlist'
+    );
+    assert.strictEqual(
+      loader.master.playlists['placeholder-uri-0'],
+      loader.master.playlists[0], 'set reference by uri for easy access'
+    );
+    assert.equal(
+      loader.master.playlists[1].uri, 'placeholder-uri-1',
+      'setup phony uri for media playlist'
+    );
+    assert.strictEqual(
+      loader.master.playlists['placeholder-uri-1'],
+      loader.master.playlists[1], 'set reference by uri for easy access'
+    );
+    assert.equal(
+      loader.master.mediaGroups.AUDIO.audio.main.playlists[0].uri,
+      'placeholder-uri-AUDIO-audio-main', 'setup phony uri for media groups'
+    );
+    assert.strictEqual(
+      loader.master.playlists['placeholder-uri-AUDIO-audio-main'],
+      loader.master.mediaGroups.AUDIO.audio.main.playlists[0],
+      'set reference by uri for easy access'
+    );
+  }
+);
 
 QUnit.test('refreshes the xml if there is a minimumUpdatePeriod', function(assert) {
-  let loader = new DashPlaylistLoader('dash-live.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash-live.mpd', this.fakeHls);
   let minimumUpdatePeriods = 0;
 
   loader.on('minimumUpdatePeriod', () => minimumUpdatePeriods++);
@@ -1501,7 +2113,7 @@ QUnit.test('refreshes the xml if there is a minimumUpdatePeriod', function(asser
 });
 
 QUnit.test('media playlists "refresh" by re-parsing master xml', function(assert) {
-  let loader = new DashPlaylistLoader('dash-live.mpd', this.fakeHls);
+  const loader = new DashPlaylistLoader('dash-live.mpd', this.fakeHls);
   let refreshes = 0;
 
   loader.on('mediaupdatetimeout', () => refreshes++);
@@ -1546,21 +2158,64 @@ QUnit.test('delays load when on final rendition', function(assert) {
   assert.equal(
     loadedplaylistEvents,
     4,
-    'one more loadedplaylist event after load with isFinalRendition false');
+    'one more loadedplaylist event after load with isFinalRendition false'
+  );
 
   loader.load(true);
   this.clock.tick(1);
   assert.equal(
     loadedplaylistEvents,
     4,
-    'no loadedplaylist event after load with isFinalRendition false');
+    'no loadedplaylist event after load with isFinalRendition false'
+  );
 
   this.clock.tick(loader.media().targetDuration / 2 * 1000);
   assert.equal(
     loadedplaylistEvents,
     5,
-    'one more loadedplaylist event after final rendition delay');
+    'one more loadedplaylist event after final rendition delay'
+  );
 });
 
-// TODO: write a test that simulates a late XHR response
-// and why we need async media setting
+QUnit.test('requests sidx if master xml includes it', function(assert) {
+  const loader = new DashPlaylistLoader('dash-sidx.mpd', this.fakeHls);
+
+  loader.load();
+  this.standardXHRResponse(this.requests.shift());
+  assert.strictEqual(loader.state, 'HAVE_MASTER', 'state is HAVE_MASTER');
+  assert.ok(loader.master.playlists[0].sidx, 'sidx info is returned from parser');
+
+  // initial media selection happens automatically
+  // as there was  no pending request
+  assert.ok(loader.hasPendingRequest(), 'request is pending');
+  assert.strictEqual(this.requests.length, 1, 'one request for sidx has been made');
+  assert.notOk(loader.media(), 'media playlist is not yet set');
+
+  this.standardXHRResponse(this.requests.shift(), sidxResponse());
+  assert.strictEqual(loader.state, 'HAVE_METADATA', 'state is HAVE_METADATA');
+  assert.ok(loader.media(), 'media playlist is set');
+  assert.ok(loader.media().sidx, 'sidx info attribute is preserved');
+  assert.deepEqual(
+    loader.media().segments[0].byterange, {
+      offset: 400,
+      length: 13001
+    },
+    'sidx was correctly applied'
+  );
+});
+
+QUnit.test('child loaders wait for async action before moving to HAVE_MASTER', function(assert) {
+  const loader = new DashPlaylistLoader('dash.mpd', this.fakeHls);
+
+  loader.load();
+  this.standardXHRResponse(this.requests.shift());
+  const childPlaylist = loader.master.playlists['placeholder-uri-AUDIO-audio-main'];
+  const childLoader = new DashPlaylistLoader(childPlaylist, this.fakeHls, false, loader);
+
+  childLoader.load();
+  assert.strictEqual(childLoader.state, 'HAVE_NOTHING');
+
+  this.clock.tick(1);
+  // media playlist is chosen automatically
+  assert.strictEqual(childLoader.state, 'HAVE_METADATA');
+});

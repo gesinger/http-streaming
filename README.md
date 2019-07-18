@@ -17,7 +17,7 @@ Video.js Compatibility: 6.0, 7.0
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
 
 - [Installation](#installation)
   - [NPM](#npm)
@@ -40,6 +40,7 @@ Video.js Compatibility: 6.0, 7.0
       - [Source](#source)
     - [List](#list)
       - [withCredentials](#withcredentials)
+      - [handleManifestRedirects](#handlemanifestredirects)
       - [useCueTags](#usecuetags)
       - [overrideNative](#overridenative)
       - [blacklistDuration](#blacklistduration)
@@ -51,6 +52,8 @@ Video.js Compatibility: 6.0, 7.0
       - [allowSeeksWithinUnsafeLiveWindow](#allowseekswithinunsafelivewindow)
       - [customTagParsers](#customtagparsers)
       - [customTagMappers](#customtagmappers)
+      - [cacheEncryptionKeys](#cacheencryptionkeys)
+      - [handlePartialData](#handlepartialdata)
   - [Runtime Properties](#runtime-properties)
     - [hls.playlists.master](#hlsplaylistsmaster)
     - [hls.playlists.media](#hlsplaylistsmedia)
@@ -69,8 +72,10 @@ Video.js Compatibility: 6.0, 7.0
   - [In-Band Metadata](#in-band-metadata)
   - [Segment Metadata](#segment-metadata)
 - [Hosting Considerations](#hosting-considerations)
-- [Known Issues](#known-issues)
+- [Known Issues and Workarounds](#known-issues-and-workarounds)
   - [Fragmented MP4 Support](#fragmented-mp4-support)
+  - [Assets with an Audio-Only Rate Get Stuck in Audio-Only](#assets-with-an-audio-only-rate-get-stuck-in-audio-only)
+  - [DASH Assets with `$Time` Interpolation and `SegmentTimeline`s with No `t`](#dash-assets-with-time-interpolation-and-segmenttimelines-with-no-t)
 - [Testing](#testing)
 - [Debugging](#debugging)
 - [Release History](#release-history)
@@ -178,7 +183,7 @@ You can deploy a single HLS stream, code against the
 regular HTML5 video APIs, and create a fast, high-quality video
 experience across all the big web device categories.
 
-Check out the [full documentation](docs/intro.md) for details on how HLS works
+Check out the [full documentation](docs/README.md) for details on how HLS works
 and advanced configuration. A description of the [adaptive switching
 behavior](docs/bitrate-switching.md) is available, too.
 
@@ -417,6 +422,19 @@ With `customTagParsers` you can pass an array of custom m3u8 tag parser objects.
 * can be used as a source option
 
 Similar to `customTagParsers`, with `customTagMappers` you can pass an array of custom m3u8 tag mapper objects. See https://github.com/videojs/m3u8-parser#custom-parsers
+
+##### cacheEncryptionKeys
+* Type: `boolean`
+* can be used as a source option
+* can be used as an initialization option
+
+This option forces the player to cache AES-128 encryption keys internally instead of requesting the key alongside every segment request.
+This option defaults to `false`.
+
+##### handlePartialData
+* Type: `boolean`,
+* Default: `false`
+* Use partial appends in the transmuxer and segment loader
 
 ### Runtime Properties
 Runtime properties are attached to the tech object when HLS is in
@@ -749,15 +767,49 @@ available](http://enable-cors.org/server.html) for popular webservers
 and most CDNs should have no trouble turning CORS on for your account.
 
 
-## Known Issues
+## Known Issues and Workarounds
 Issues that are currenty known. If you want to
 help find a solution that would be appreciated!
 
 ### Fragmented MP4 Support
 Edge has native support for HLS but only in the MPEG2-TS container. If
-you attempt to play an HLS stream with fragmented MP4 segments, Edge
-will stall. Fragmented MP4s are only supported on browser that have
+you attempt to play an HLS stream with fragmented MP4 segments (without
+[overriding native playback](#overridenative)), Edge will stall.
+Fragmented MP4s are only supported on browsers that have
 [Media Source Extensions](http://caniuse.com/#feat=mediasource) available.
+
+### Assets with an Audio-Only Rate Get Stuck in Audio-Only
+Some assets which have an audio-only rate and the lowest-bandwidth
+audio + video rate isn't that low get stuck in audio-only mode. This is
+because the initial bandwidth calculation thinks it there's insufficient
+bandwidth for selecting the lowest-quality audio+video playlist, so it picks
+the only-audio one, which unfortunately locks it to being audio-only forever,
+preventing a switch to the audio+video playlist when it gets a better
+estimation of bandwidth.
+
+Until we've implemented a full fix, it is recommended to set the
+[`enableLowInitialPlaylist` option](#enablelowinitialplaylist) for any assets
+that include an audio-only rate; it should always select the lowest-bandwidth
+audio+video playlist for its first playlist.
+
+It's also worth mentioning that Apple no longer requires having an audio-only
+rate; instead, they require a 192kbps audio+video rate (see Apple's current
+[HLS Authoring Specification][]). Removing the audio-only rate would of course
+eliminate this problem since there would be only audio+video playlists to
+choose from.
+
+Follow progress on this in issue [#175](https://github.com/videojs/http-streaming/issues/175).
+
+[HLS Authoring Specification]: https://developer.apple.com/documentation/http_live_streaming/hls_authoring_specification_for_apple_devices
+
+### DASH Assets with `$Time` Interpolation and `SegmentTimeline`s with No `t`
+
+DASH assets which use `$Time` in a `SegmentTemplate`, and also have a
+`SegmentTimeline` where only the first `S` has a `t` and the rest only have a
+`d`, do not load currently.
+
+There is currently no workaround for this, but you can track progress on this
+in issue [#256](https://github.com/videojs/http-streaming/issues/256).
 
 ## Testing
 
