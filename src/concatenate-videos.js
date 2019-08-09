@@ -126,7 +126,7 @@ export const parseManifest = ({ url, manifestString, mimeType }) => {
  * @return {Object[]}
  *          An array of playlist objects, one from each of the provided manifests
  */
-const chooseVideoPlaylists = (manifestObjects, targetVerticalResolution) => {
+export const chooseVideoPlaylists = (manifestObjects, targetVerticalResolution) => {
   return manifestObjects.map((manifestObject) => {
     // if the manifest is not a master, then it is the only rendition to use
     if (!manifestObject.playlists) {
@@ -139,13 +139,14 @@ const chooseVideoPlaylists = (manifestObjects, targetVerticalResolution) => {
       }
 
       if (playlist.attributes.RESOLUTION) {
-        if (Math.abs(playlist.attributes.RESOLUTION) - targetVerticalResolution <
-            Math.abs(acc.attributes.RESOLUTION) - targetVerticalResolution) {
+        if (Math.abs(playlist.attributes.RESOLUTION - targetVerticalResolution) <
+            Math.abs(acc.attributes.RESOLUTION - targetVerticalResolution)) {
           return playlist;
         }
         return acc;
       }
 
+      // BANDWIDTH attribute is required
       return Math.abs(playlist.attributes.BANDWIDTH - config.INITIAL_BANDWIDTH) <
         Math.abs(acc.attributes.BANDWIDTH - config.INITIAL_BANDWIDTH) ? playlist : acc;
     }, null);
