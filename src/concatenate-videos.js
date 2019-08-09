@@ -1,12 +1,9 @@
 import videojs from 'video.js';
-// import { Parser as M3u8Parser } from 'm3u8-parser';
 import window from 'global/window';
 import config from './config';
 import { simpleTypeFromSourceType } from './videojs-http-streaming';
 import { parseCodecs } from './util/codecs.js';
 import {
-  // setupMediaPlaylists,
-  // resolveMediaGroupUris,
   resolveSegmentUris,
   parseManifest as parseHlsManifest
 } from './playlist-loader';
@@ -21,7 +18,7 @@ import { resolveUrl } from './resolve-url';
  * @param {function(Object, Object)} callback
  *        Callback function with error and object containing url to response text entries
  */
-const requestAll = (urls, callback) => {
+export const requestAll = (urls, callback) => {
   let requestsRemaining = urls.length;
   const responses = {};
 
