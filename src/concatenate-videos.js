@@ -77,7 +77,7 @@ export const requestAll = (urls, callback) => {
  * @return {Object}
  *          A VHS manifest object
  */
-const parseManifest = ({ url, manifestString, mimeType }) => {
+export const parseManifest = ({ url, manifestString, mimeType }) => {
   const type = simpleTypeFromSourceType(mimeType);
 
   if (type === 'dash') {
