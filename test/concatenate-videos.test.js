@@ -701,3 +701,25 @@ QUnit.test('when no resolution, chooses video playlists by bandwidth', function(
     'chose closest video playlists'
   );
 });
+
+QUnit.test(
+'when only partial resolution info, selects video playlist with info',
+function(assert) {
+  const playlist1 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH - 3 } };
+  const playlist2 = {
+    attributes: {
+      RESOLUTION: 1,
+      BANDWIDTH: config.INITIAL_BANDWIDTH - 2
+    }
+  };
+  const playlist3 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH + 1 } };
+  const manifestObject1 = { playlists: [playlist3, playlist2, playlist1] };
+  const manifestObject2 = { playlists: [playlist2, playlist3, playlist1] };
+  const manifestObject3 = { playlists: [playlist1, playlist3, playlist2] };
+
+  assert.deepEqual(
+    chooseVideoPlaylists([manifestObject1, manifestObject2, manifestObject3], 720),
+    [playlist2, playlist2, playlist2],
+    'chose video playlists with resolution info'
+  );
+});

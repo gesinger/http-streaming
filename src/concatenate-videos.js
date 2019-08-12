@@ -115,8 +115,13 @@ export const parseManifest = ({ url, manifestString, mimeType }) => {
 
 /**
  * Selects the closest matching video playlist to the provided vertical resolution from
- * an array of manifest objects. If the playlists do not include resolution information,
- * the function will match based on VHS' INITIAL_BANDWIDTH config property.
+ * an array of manifest objects.
+ *
+ * If the playlists do not include resolution information, the function will match based
+ * on VHS' INITIAL_BANDWIDTH config property.
+ *
+ * If only some playlists include resolution information, the function will only consider
+ * those with resolution information.
  *
  * @param {Object[]} manifestObjects
  *        An array of manifest objects (in the format used by VHS)
@@ -139,10 +144,22 @@ export const chooseVideoPlaylists = (manifestObjects, targetVerticalResolution) 
       }
 
       if (playlist.attributes.RESOLUTION) {
+        // If the selected playlist doesn't have resolution information, and this one
+        // does, choose the playlist with resolution info.
+        if (!acc.attributes.RESOLUTION) {
+          return playlist;
+        }
+
         if (Math.abs(playlist.attributes.RESOLUTION - targetVerticalResolution) <
             Math.abs(acc.attributes.RESOLUTION - targetVerticalResolution)) {
           return playlist;
         }
+        return acc;
+      }
+
+      // If the selected playlist does have resolution information, and this one doesn't,
+      // stick with the playlist with resolution info.
+      if (acc.attributes.RESOLUTION) {
         return acc;
       }
 
