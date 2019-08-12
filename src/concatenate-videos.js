@@ -190,7 +190,7 @@ export const chooseVideoPlaylists = (manifestObjects, targetVerticalResolution) 
  *          An array of audio playlist objects, one for each of the provided video
  *          playlists
  */
-const chooseAudioPlaylists = (manifestObjects, videoPlaylists) => {
+export const chooseAudioPlaylists = (manifestObjects, videoPlaylists) => {
   if (manifestObjects.length !== videoPlaylists.length) {
     throw new Error('Invalid number of video playlists for provided manifests');
   }

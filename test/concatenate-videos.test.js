@@ -6,7 +6,8 @@ import {
   requestAll,
   parseManifest,
   concatenateVideos,
-  chooseVideoPlaylists
+  chooseVideoPlaylists,
+  chooseAudioPlaylists
 } from '../src/concatenate-videos';
 import { useFakeEnvironment } from './test-helpers';
 import config from '../src/config';
@@ -721,5 +722,159 @@ function(assert) {
     chooseVideoPlaylists([manifestObject1, manifestObject2, manifestObject3], 720),
     [playlist2, playlist2, playlist2],
     'chose video playlists with resolution info'
+  );
+});
+
+QUnit.module('chooseAudioPlaylists');
+
+QUnit.test('chooses default audio playlists for video playlists', function(assert) {
+  const audioPlaylist2Resolved = { test: 'case' };
+  const audioPlaylist1 = { default: true, resolvedUri: 'resolved-uri-1' };
+  const audioPlaylist2 = { default: true, playlists: [audioPlaylist2Resolved] };
+  const audioPlaylist3 = { default: true, resolvedUri: 'resolved-uri-3' };
+  const manifestObject1 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: audioPlaylist1,
+          es: { default: false, resolvedUri: 'resolved-uri' }
+        }
+      }
+    }
+  };
+  const manifestObject2 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, playlists: [] },
+          es: audioPlaylist2
+        }
+      }
+    }
+  };
+  const manifestObject3 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, resolvedUri: 'resolved-uri' },
+          es: audioPlaylist3
+        }
+      }
+    }
+  };
+  const videoPlaylist1 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist2 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist3 = { attributes: { AUDIO: 'audio1' } };
+
+  assert.deepEqual(
+    chooseAudioPlaylists(
+      [manifestObject1, manifestObject2, manifestObject3],
+      [videoPlaylist1, videoPlaylist2, videoPlaylist3]
+    ),
+    [audioPlaylist1, audioPlaylist2Resolved, audioPlaylist3],
+    'chose default audio playlists'
+  );
+});
+
+QUnit.test('throws error when missing audio playlist', function(assert) {
+  const audioPlaylist1 = { default: true, resolvedUri: 'resolved-uri-1' };
+  // missing both resolvedUri and playlists, but only for this audio playlist
+  const audioPlaylist2 = { default: true };
+  const audioPlaylist3 = { default: true, resolvedUri: 'resolved-uri-3' };
+  const manifestObject1 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: audioPlaylist1,
+          es: { default: false, resolvedUri: 'resolved-uri' }
+        }
+      }
+    }
+  };
+  const manifestObject2 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, playlists: [] },
+          es: audioPlaylist2
+        }
+      }
+    }
+  };
+  const manifestObject3 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, resolvedUri: 'resolved-uri' },
+          es: audioPlaylist3
+        }
+      }
+    }
+  };
+  const videoPlaylist1 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist2 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist3 = { attributes: { AUDIO: 'audio1' } };
+
+  assert.throws(
+    () => {
+      chooseAudioPlaylists(
+        [manifestObject1, manifestObject2, manifestObject3],
+        [videoPlaylist1, videoPlaylist2, videoPlaylist3]
+      )
+    },
+    new Error('Did not find matching audio playlists for all video playlists'),
+    'throws error when missing resolvedUri and playlist in matching audio playlist'
+  );
+});
+
+QUnit.test('throws error when missing default audio playlist', function(assert) {
+  const audioPlaylist2Resolved = { test: 'case' };
+  const audioPlaylist1 = { default: true, resolvedUri: 'resolved-uri-1' };
+  // not default
+  const audioPlaylist2 = { default: false, playlists: [audioPlaylist2Resolved] };
+  const audioPlaylist3 = { default: true, resolvedUri: 'resolved-uri-3' };
+  const manifestObject1 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: audioPlaylist1,
+          es: { default: false, resolvedUri: 'resolved-uri' }
+        }
+      }
+    }
+  };
+  const manifestObject2 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, playlists: [] },
+          es: audioPlaylist2
+        }
+      }
+    }
+  };
+  const manifestObject3 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, resolvedUri: 'resolved-uri' },
+          es: audioPlaylist3
+        }
+      }
+    }
+  };
+  const videoPlaylist1 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist2 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist3 = { attributes: { AUDIO: 'audio1' } };
+
+  assert.throws(
+    () => {
+      chooseAudioPlaylists(
+        [manifestObject1, manifestObject2, manifestObject3],
+        [videoPlaylist1, videoPlaylist2, videoPlaylist3]
+      )
+    },
+    new Error('Did not find matching audio playlists for all video playlists'),
+    'throws error when missing a default audio playlist'
   );
 });
