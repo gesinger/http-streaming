@@ -952,3 +952,105 @@ QUnit.test('uses largest target duration', function(assert) {
 
   assert.equal(combinedPlaylist.targetDuration, 11, 'used largest target duration');
 });
+
+QUnit.test('adds discontinuity between playlists', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    segments: [{
+      uri: 'uri1-1.ts'
+    }, {
+      uri: 'uri1-2.ts'
+    }]
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    segments: [{
+      uri: 'uri2-1.ts'
+    }, {
+      uri: 'uri2-2.ts'
+    }]
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.deepEqual(
+    combinedPlaylist.segments,
+    [
+      { uri: 'uri1-1.ts', timeline: 0 },
+      { uri: 'uri1-2.ts', timeline: 0 },
+      { discontinuity: true, uri: 'uri2-1.ts', timeline: 1 },
+      { uri: 'uri2-2.ts', timeline: 1 }
+    ],
+    'added discontinuity between playlists'
+  );
+});
+
+QUnit.test('ignores playlist timeline values', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    segments: [{
+      timeline: 3,
+      uri: 'uri1-1.ts'
+    }, {
+      timeline: 3,
+      uri: 'uri1-2.ts'
+    }]
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    segments: [{
+      timeline: 7,
+      uri: 'uri2-1.ts'
+    }, {
+      timeline: 7,
+      uri: 'uri2-2.ts'
+    }]
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.deepEqual(
+    combinedPlaylist.segments,
+    [
+      { uri: 'uri1-1.ts', timeline: 0 },
+      { uri: 'uri1-2.ts', timeline: 0 },
+      { discontinuity: true, uri: 'uri2-1.ts', timeline: 1 },
+      { uri: 'uri2-2.ts', timeline: 1 }
+    ],
+    'added discontinuity between playlists'
+  );
+});
+
+QUnit.test('does not ignore discontinuity within playlist', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    segments: [{
+      timeline: 3,
+      uri: 'uri1-1.ts'
+    }, {
+      timeline: 3,
+      uri: 'uri1-2.ts'
+    }]
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    segments: [{
+      timeline: 7,
+      uri: 'uri2-1.ts'
+    }, {
+      discontinuity: true,
+      timeline: 8,
+      uri: 'uri2-2.ts'
+    }]
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.deepEqual(
+    combinedPlaylist.segments,
+    [
+      { uri: 'uri1-1.ts', timeline: 0 },
+      { uri: 'uri1-2.ts', timeline: 0 },
+      { discontinuity: true, uri: 'uri2-1.ts', timeline: 1 },
+      { discontinuity: true, uri: 'uri2-2.ts', timeline: 2 }
+    ],
+    'made use of discontinuity within playlist'
+  );
+});
