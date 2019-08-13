@@ -315,7 +315,13 @@ export const combinePlaylists = ({ playlists, uriSuffix = '' }) => {
  * @return {Object}
  *          A master manifest object containing the playlists
  */
-const constructMasterManifest = ({ videoPlaylist, audioPlaylist }) => {
+export const constructMasterManifest = ({ videoPlaylist, audioPlaylist }) => {
+  // create copies of the playlists
+  videoPlaylist = JSON.parse(JSON.stringify(videoPlaylist));
+  if (audioPlaylist) {
+    audioPlaylist = JSON.parse(JSON.stringify(audioPlaylist));
+  }
+
   const videoPlaylists = [videoPlaylist];
   const audioPlaylists = audioPlaylist ? [audioPlaylist] : null;
 

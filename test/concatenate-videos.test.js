@@ -8,7 +8,8 @@ import {
   concatenateVideos,
   chooseVideoPlaylists,
   chooseAudioPlaylists,
-  combinePlaylists
+  combinePlaylists,
+  constructMasterManifest
 } from '../src/concatenate-videos';
 import { useFakeEnvironment } from './test-helpers';
 import config from '../src/config';
@@ -1053,4 +1054,100 @@ QUnit.test('does not ignore discontinuity within playlist', function(assert) {
     ],
     'made use of discontinuity within playlist'
   );
+});
+
+QUnit.module('constructMasterManifest');
+
+QUnit.test('creates master manifest from sole video playlist', function(assert) {
+  const videoPlaylist = {
+    attributes: {},
+    segments: [{
+      uri: 'segment1.ts'
+    }, {
+      uri: 'segment2.ts'
+    }]
+  };
+
+  assert.deepEqual(
+    constructMasterManifest({ videoPlaylist }),
+    {
+      mediaGroups: {
+        'AUDIO': {},
+        'VIDEO': {},
+        'CLOSED-CAPTIONS': {},
+        'SUBTITLES': {}
+      },
+      uri: window.location.href,
+      playlists: [{
+        segments: [{
+          uri: 'segment1.ts'
+        }, {
+          uri: 'segment2.ts'
+        }]
+      }]
+    },
+    'created master manifest');
+});
+
+QUnit.test(
+'creates media groups with demuxed audio if audio playlist is present',
+function(assert) {
+  const videoPlaylist = {
+    attributes: {},
+    segments: [{
+      uri: 'segment1.ts'
+    }, {
+      uri: 'segment2.ts'
+    }]
+  };
+  const audioPlaylist = {
+    segments: [{
+      uri: 'audio-segment1.ts'
+    }, {
+      uri: 'audio-segment2.ts'
+    }, {
+      uri: 'audio-segment.ts'
+    }]
+  };
+
+  assert.deepEqual(
+    constructMasterManifest({ videoPlaylist, audioPlaylist }),
+    {
+      mediaGroups: {
+        'AUDIO': {
+          audio: {
+            default: {
+              autoselect: true,
+              default: true,
+              language: '',
+              uri: 'combined-audio-playlists',
+              playlists: [{
+                segments: [{
+                  uri: 'audio-segment1.ts'
+                }, {
+                  uri: 'audio-segment2.ts'
+                }, {
+                  uri: 'audio-segment.ts'
+                }]
+              }]
+            }
+          }
+        },
+        'VIDEO': {},
+        'CLOSED-CAPTIONS': {},
+        'SUBTITLES': {}
+      },
+      uri: window.location.href,
+      playlists: [{
+        attributes: {
+          AUDIO: 'audio'
+        },
+        segments: [{
+          uri: 'segment1.ts'
+        }, {
+          uri: 'segment2.ts'
+        }]
+      }]
+    },
+    'created master manifest with demuxed audio');
 });
