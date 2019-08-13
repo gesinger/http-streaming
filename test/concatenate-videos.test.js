@@ -7,7 +7,8 @@ import {
   parseManifest,
   concatenateVideos,
   chooseVideoPlaylists,
-  chooseAudioPlaylists
+  chooseAudioPlaylists,
+  combinePlaylists
 } from '../src/concatenate-videos';
 import { useFakeEnvironment } from './test-helpers';
 import config from '../src/config';
@@ -820,7 +821,7 @@ QUnit.test('throws error when missing audio playlist', function(assert) {
       chooseAudioPlaylists(
         [manifestObject1, manifestObject2, manifestObject3],
         [videoPlaylist1, videoPlaylist2, videoPlaylist3]
-      )
+      );
     },
     new Error('Did not find matching audio playlists for all video playlists'),
     'throws error when missing resolvedUri and playlist in matching audio playlist'
@@ -872,9 +873,60 @@ QUnit.test('throws error when missing default audio playlist', function(assert) 
       chooseAudioPlaylists(
         [manifestObject1, manifestObject2, manifestObject3],
         [videoPlaylist1, videoPlaylist2, videoPlaylist3]
-      )
+      );
     },
     new Error('Did not find matching audio playlists for all video playlists'),
     'throws error when missing a default audio playlist'
+  );
+});
+
+QUnit.module('combinePlaylists');
+
+QUnit.test('uses attributes of the first playlist', function(assert) {
+  const playlist1 = {
+    attributes: {
+      test: 'first playlist attributes',
+      extraFirst: 'test'
+    },
+    uri: '',
+    segments: []
+  };
+  const playlist2 = {
+    attributes: {
+      test: 'second playlist attributes',
+      extraSecond: 'test'
+    },
+    uri: '',
+    segments: []
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.deepEqual(
+    combinedPlaylist.attributes,
+    playlist1.attributes,
+    'used attributes of the first playlist'
+  );
+});
+
+QUnit.test('provides uri and resolvedUri', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    segments: []
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    segments: []
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.equal(
+    combinedPlaylist.uri,
+    'combined-playlist',
+    'provided uri for combined playlist'
+  );
+  assert.equal(
+    combinedPlaylist.resolvedUri,
+    'combined-playlist',
+    'provided resolvedUri for combined playlist'
   );
 });

@@ -253,7 +253,7 @@ export const chooseAudioPlaylists = (manifestObjects, videoPlaylists) => {
  *          A single playlist containing the combined elements (and joined segments) of
  *          all of the provided playlists
  */
-const combinePlaylists = ({ playlists, uriSuffix = '' }) => {
+export const combinePlaylists = ({ playlists, uriSuffix = '' }) => {
   const combinedPlaylist = playlists.reduce((acc, playlist) => {
     const firstNewSegmentIndex = acc.segments.length;
     // need to clone because we're modifying the segment objects
