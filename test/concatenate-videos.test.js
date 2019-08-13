@@ -930,3 +930,25 @@ QUnit.test('provides uri and resolvedUri', function(assert) {
     'provided resolvedUri for combined playlist'
   );
 });
+
+QUnit.test('uses largest target duration', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    targetDuration: 10,
+    segments: [{
+      // segment duration should be ignored
+      duration: 12
+    }]
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    targetDuration: 11,
+    segments: [{
+      // segment duration should be ignored
+      duration: 13
+    }]
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.equal(combinedPlaylist.targetDuration, 11, 'used largest target duration');
+});

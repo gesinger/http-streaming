@@ -279,8 +279,8 @@ export const combinePlaylists = ({ playlists, uriSuffix = '' }) => {
   combinedPlaylist.uri = `combined-playlist${uriSuffix}`;
   combinedPlaylist.resolvedUri = combinedPlaylist.uri;
   combinedPlaylist.playlistType = 'VOD';
-  combinedPlaylist.targetDuration = combinedPlaylist.segments.reduce((acc, segment) => {
-    return segment.duration > acc ? segment.duration : acc;
+  combinedPlaylist.targetDuration = playlists.reduce((acc, playlist) => {
+    return acc > playlist.targetDuration ? acc : playlist.targetDuration;
   }, 0);
   combinedPlaylist.endList = true;
   combinedPlaylist.mediaSequence = 0;
