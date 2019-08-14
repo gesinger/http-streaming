@@ -1079,6 +1079,7 @@ QUnit.test('creates master manifest from sole video playlist', function(assert) 
       },
       uri: window.location.href,
       playlists: [{
+        attributes: {},
         segments: [{
           uri: 'segment1.ts'
         }, {
