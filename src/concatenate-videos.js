@@ -2,7 +2,11 @@ import videojs from 'video.js';
 import window from 'global/window';
 import config from './config';
 import { simpleTypeFromSourceType } from './videojs-http-streaming';
-import { parseCodecs } from './util/codecs.js';
+import {
+  parseCodecs,
+  audioProfileFromDefault,
+  mapLegacyAvcCodecs
+} from './util/codecs.js';
 import {
   resolveSegmentUris,
   parseManifest as parseHlsManifest
@@ -364,19 +368,58 @@ export const constructMasterManifest = ({ videoPlaylist, audioPlaylist }) => {
 };
 
 /**
+ * Determines the video and audio codecs for each playlist and returns an object
+ * associating each playlist's resolvedUri to its respective codecs.
+ *
+ * @param {Object} manifest
+ *        A master manifest object (in the format used by VHS)
+ *
+ * @return {Object}
+ *         Object associating playlists to their parsed codecs
+ */
+export const codecsForPlaylists = (manifest) => {
+  return manifest.playlists.reduce((acc, playlist) => {
+    // Technically, there should always be the CODECS attribute (and an attributes
+    // object). But if they don't exist (e.g., in a media playlist that hasn't had the
+    // attributes object added, since m3u8-parser doesn't add the attributes object to
+    // media playlists), let calling functions decide what to do with playlists with
+    // missing codec info.
+    if (!playlist.attributes || !playlist.attributes.CODECS) {
+      return acc;
+    }
+
+    const codecs = parseCodecs(playlist.attributes.CODECS);
+
+    if (codecs.codecCount !== 2 && playlist.attributes.AUDIO) {
+      const audioProfile = audioProfileFromDefault(manifest, playlist.attributes.AUDIO);
+
+      if (audioProfile) {
+        codecs.audioProfile = audioProfile;
+        codecs.codecCount++;
+      }
+    }
+
+    acc[playlist.resolvedUri] = codecs;
+
+    return acc;
+  }, {});
+};
+
+/**
  * Checks the VHS-formatted manifest objects for incompatibilities to see if they can be
- * concatenated together. The incompatibilities checked for are:
+ * concatenated together. The checks include:
  *
  * - Presence of a rendition with both audio and video in each source (audio only and
  *   video only are not currently supported)
- * - Presence of either a demuxed audio playlist rendition in each source or a muxed
- *   rendition in each source (to maintain consistency between sources)
- * - Chosen renditions must have compatible codecs with each other
- * - Chosen renditions must have supported codecs by the browser's implementaiton of MSE
- *   (media source extensions)
+ * - Presence of either a demuxed audio playlist in each source or a muxed rendition in
+ *   each source (to maintain consistency between sources)
+ * - Availability of renditions with supported video codecs for browser's implementation
+ *   of MSE (media source extensions)
  *
- * Note that the function will short circuit with the first error detected, meaning that
- * the playlists may have multiple incompatibilities.
+ * Note that these checks do not guarantee a successful concatenation operation. Limited
+ * availability of information (e.g., no codec info for media manifests), and a lack of
+ * checks for compatibility between manifests, may result in an unsuccessful concatenation
+ * operation. These are rarer cases though, and should be handled by the user.
  *
  * @param {Object[]} manifestObjects
  *        An array of manifest objects (in the format used by VHS)
@@ -384,31 +427,58 @@ export const constructMasterManifest = ({ videoPlaylist, audioPlaylist }) => {
  * @return {(null|string)}
  *          null if no errors or a string with an error if one was detected
  */
-const checkForIncompatibility = (manifestObjects) => {
-  let expectedNumberOfCodecs = 2;
+export const checkForIncompatibility = (manifestObjects) => {
+  // remove any media playlists, since we have no codec info to use for the checks
+  manifestObjects = manifestObjects.filter((manifestObject) => {
+    return manifestObject.playlists;
+  });
 
-  // TODO all checks
+  const codecsForPlaylist = {};
 
-  // Add all video/audio codecs into a map, and add 1 if a playlist exists in the
-  // manifestObject (only 1 for each playlist)
-  manifestObjects.map((manifestObject) => {
-    // master will have multiple, media only one
-    const playlists = manifestObject.playlists || [manifestObject];
+  manifestObjects.forEach((manifestObject) => {
+    const playlistToCodecsMap = codecsForPlaylists(manifestObject);
 
-    playlists.forEach((playlist) => {
-      const codecs = parseCodecs(playlist.attributes.CODECS);
-
-      if (!expectedNumberOfCodecs) {
-        expectedNumberOfCodecs = codecs.codecCount;
-      }
-
-      // TODO must check all playlists
-      if (expectedNumberOfCodecs !== codecs.codecCount) {
-        // playlists
-        return;
-      }
+    Object.keys(playlistToCodecsMap).forEach((playlistKey) => {
+      codecsForPlaylist[playlistKey] = playlistToCodecsMap[playlistKey];
     });
   });
+
+  // remove audio and video only playlists, as well as playlists with video codecs not
+  // supported by the browser
+  const manifestPlaylists = manifestObjects.map((manifestObject) => {
+    return manifestObject.playlists.filter((playlist) => {
+      const codecs = codecsForPlaylist[playlist.resolvedUri];
+
+      // Allow playlists with no specified codecs to pass through. Although the playlists
+      // should have codec info, this prevents missing codec info from auto-failing.
+      if (!codecs) {
+        videojs.log.warn(
+          `Missing codec info for playlist with URI: ${playlist.resolvedUri}`);
+        return true;
+      }
+
+      if (codecs.codecCount !== 2) {
+        return false;
+      }
+
+      if (window.MediaSource &&
+          window.MediaSource.isTypeSupported &&
+          !window.MediaSource.isTypeSupported(
+            // ignore audio for the MSE support check to mirror VHS' check
+            `video/mp4; codecs="${mapLegacyAvcCodecs(playlist.attributes.CODECS)}"`)) {
+        return false;
+      }
+
+      return true;
+    });
+  });
+
+  const manifestsWithSupportedPlaylists =
+    manifestPlaylists.filter((playlists) => playlists.length > 0);
+
+  if (manifestsWithSupportedPlaylists.length < manifestObjects.length) {
+    return 'Did not find a supported playlist for each manifest';
+  }
 
   return null;
 };

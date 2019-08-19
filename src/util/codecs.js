@@ -123,7 +123,7 @@ const getCodecs = function(media) {
   return defaultCodecs;
 };
 
-const audioProfileFromDefault = (master, audioGroupId) => {
+export const audioProfileFromDefault = (master, audioGroupId) => {
   if (!master.mediaGroups.AUDIO || !audioGroupId) {
     return null;
   }
