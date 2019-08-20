@@ -276,10 +276,46 @@ export const combinePlaylists = ({ playlists, uriSuffix = '' }) => {
     segments: []
   });
 
-  // TODO instead of relying on the attributes object of the first playlist, use a subset
-  // of relevant properties to ensure they accurately reflect the content (can't assume
-  // the first playlist has the same attributes as the others)
-  combinedPlaylist.attributes = playlists[0].attributes || {};
+  // As defined by the HLS spec, the BANDWIDTH attribute for a playlist is the peak
+  // bandwidth in the stream, therefore, for a combined playlist, the max of the BANDWIDTH
+  // values is used.
+  //
+  // Spec reference:
+  // https://tools.ietf.org/html/draft-pantos-http-live-streaming-23#section-4.3.4.2
+  const maxBandwidth = playlists.reduce((acc, playlist) => {
+    if (playlist.attributes &&
+        playlist.attributes.BANDWIDTH &&
+        (!acc || playlist.attributes.BANDWIDTH > acc)) {
+      return playlist.attributes.BANDWIDTH;
+    }
+    return acc;
+  }, null);
+  // Because the codecs may be different (but compatible), use the first defined set, if
+  // available.
+  const codecs = playlists.reduce((acc, playlist) => {
+    if (acc) {
+      return acc;
+    }
+    return playlist.attributes ? playlist.attributes.CODECS : null;
+  }, null);
+
+  // Attributes used are a subset of
+  // https://tools.ietf.org/html/draft-pantos-http-live-streaming-23#section-4.3.4.2
+  // depending on what is available in the playlists. For instance, BANDWIDTH and CODEC
+  // attributes may only be available if the original sources were master playlists.
+  //
+  // Although there are other approaches that may be taken in determining the best set of
+  // combined attributes (for instance, using the first playlist's attributes, or merging
+  // all attributes in all playlists), using a known subset is safest, as it should
+  // prevent any undefined behavior using attributes that may only be relevant for a
+  // specific playlist.
+  combinedPlaylist.attributes = {};
+  if (maxBandwidth) {
+    combinedPlaylist.attributes.BANDWIDTH = maxBandwidth;
+  }
+  if (codecs) {
+    combinedPlaylist.attributes.CODECS = codecs;
+  }
   combinedPlaylist.uri = `combined-playlist${uriSuffix}`;
   combinedPlaylist.resolvedUri = combinedPlaylist.uri;
   combinedPlaylist.playlistType = 'VOD';

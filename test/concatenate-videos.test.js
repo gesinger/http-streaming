@@ -31,7 +31,7 @@ const hlsMasterPlaylist = ({
     const audioAttribute = includeDemuxedAudio ? ',AUDIO="audio"' : '';
 
     playlists.push(`
-      #EXT-X-STREAM-INF:BANDWIDTH=${i}${audioAttribute}
+      #EXT-X-STREAM-INF:BANDWIDTH=${100 + i}${audioAttribute}
       ${playlistPath}
     `);
   }
@@ -281,7 +281,12 @@ QUnit.test('concatenates HLS and DASH sources together', function(assert) {
   );
 
   const expectedAudioPlaylist = {
-    attributes: {},
+    attributes: {
+      // bandwidth from the DASH playlist
+      BANDWIDTH: 128000,
+      // codecs from the DASH playlist (first playlist with CODECS attribute)
+      CODECS: 'mp4a.40.2'
+    },
     discontinuitySequence: 0,
     discontinuityStarts: [1],
     endList: true,
@@ -338,9 +343,11 @@ QUnit.test('concatenates HLS and DASH sources together', function(assert) {
         },
         playlists: [{
           attributes: {
-            AUDIO: 'audio',
-            // TODO?
-            BANDWIDTH: 0
+            // bandwidth from the DASH playlist
+            BANDWIDTH: 6800000,
+            // codecs from the DASH playlist (first playlist with CODECS attribute)
+            CODECS: 'avc1.420015',
+            AUDIO: 'audio'
           },
           uri: 'combined-playlist',
           resolvedUri: 'combined-playlist',
@@ -887,10 +894,11 @@ QUnit.test('throws error when missing default audio playlist', function(assert) 
 
 QUnit.module('combinePlaylists');
 
-QUnit.test('uses attributes of the first playlist', function(assert) {
+QUnit.test('uses max BANDWIDTH and first playlist CODECS attributes', function(assert) {
   const playlist1 = {
     attributes: {
-      test: 'first playlist attributes',
+      BANDWIDTH: 111,
+      CODECS: 'avc1.4d400e, mp4a.40.5',
       extraFirst: 'test'
     },
     uri: '',
@@ -898,7 +906,8 @@ QUnit.test('uses attributes of the first playlist', function(assert) {
   };
   const playlist2 = {
     attributes: {
-      test: 'second playlist attributes',
+      BANDWIDTH: 112,
+      CODECS: 'avc1.4d400d, mp4a.40.2',
       extraSecond: 'test'
     },
     uri: '',
@@ -908,8 +917,11 @@ QUnit.test('uses attributes of the first playlist', function(assert) {
 
   assert.deepEqual(
     combinedPlaylist.attributes,
-    playlist1.attributes,
-    'used attributes of the first playlist'
+    {
+      BANDWIDTH: 112,
+      CODECS: 'avc1.4d400e, mp4a.40.5'
+    },
+    'used CODECS attribute of the first playlist and largest BANDWIDTH attribute'
   );
 });
 
