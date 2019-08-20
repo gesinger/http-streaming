@@ -11,7 +11,8 @@ import {
   combinePlaylists,
   constructMasterManifest,
   codecsForPlaylists,
-  checkForIncompatibility
+  checkForIncompatibility,
+  resolvePlaylists
 } from '../src/concatenate-videos';
 import { useFakeEnvironment } from './test-helpers';
 import config from '../src/config';
@@ -465,11 +466,6 @@ QUnit.test('calls back with an error on request failure', function(assert) {
     done();
   });
 });
-
-// TODO
-// Includes codec info
-// Calls back with an error when incompatible playlists
-// Falls back to config.INITIAL_BANDWIDTH when no resolution information
 
 QUnit.module('requestAll', {
   beforeEach(assert) {
@@ -1416,4 +1412,174 @@ QUnit.test('manifests without codecs attribute pass through', function(assert) {
     }]),
     'returned no error message for no attributes object'
   );
+});
+
+QUnit.module('resolvePlaylists', {
+  beforeEach() {
+    this.realXhr = videojs.xhr.XMLHttpRequest;
+    this.server = sinon.fakeServer.create();
+    videojs.xhr.XMLHttpRequest = this.server.xhr;
+    this.server.autoRespond = true;
+  },
+
+  afterEach() {
+    this.server.restore();
+    videojs.xhr.XMLHttpRequest = this.realXhr;
+  }
+});
+
+QUnit.test('makes no requests when playlists already resolved', function(assert) {
+  assert.expect(3);
+
+  const done = assert.async();
+  const playlists = [{
+    resolvedUri: 'p1',
+    segments: []
+  }, {
+    resolvedUri: 'p2',
+    segments: []
+  }, {
+    resolvedUri: 'p3',
+    segments: []
+  }];
+  const mimeTypes = [
+    'application/x-mpegURL',
+    'application/x-mpegURL',
+    'application/dash+xml'
+  ];
+
+  resolvePlaylists({
+    playlists,
+    mimeTypes,
+    callback: (err, playlistsToParsed) => {
+      assert.notOk(err, 'no error');
+      assert.equal(this.server.requests.length, 0, 'made no requests');
+      assert.deepEqual(
+        playlistsToParsed,
+        {
+          p1: {
+            resolvedUri: 'p1',
+            segments: []
+          },
+          p2: {
+            resolvedUri: 'p2',
+            segments: []
+          },
+          p3: {
+            resolvedUri: 'p3',
+            segments: []
+          }
+        },
+        'returned playlists to parsed object'
+      );
+      done();
+    }
+  });
+});
+
+QUnit.test('makes requests for unresolved playlists', function(assert) {
+  assert.expect(4);
+
+  const done = assert.async();
+  const playlists = [{
+    resolvedUri: 'p1',
+    segments: []
+  }, {
+    resolvedUri: 'p2'
+  }, {
+    resolvedUri: 'p3',
+    segments: []
+  }];
+  const mimeTypes = [
+    'application/x-mpegURL',
+    'application/x-mpegURL',
+    'application/dash+xml'
+  ];
+
+  this.server.respondWith(
+    'GET',
+    'p2',
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ numSegments: 1 })]
+  );
+
+  resolvePlaylists({
+    playlists,
+    mimeTypes,
+    callback: (err, playlistsToParsed) => {
+      assert.notOk(err, 'no error');
+      assert.equal(this.server.requests.length, 1, 'made one request');
+      assert.equal(this.server.requests[0].url, 'p2', 'made request for p2');
+      assert.deepEqual(
+        playlistsToParsed,
+        {
+          p1: {
+            resolvedUri: 'p1',
+            segments: []
+          },
+          p2: {
+            allowCache: true,
+            attributes: {},
+            discontinuitySequence: 0,
+            discontinuityStarts: [],
+            endList: true,
+            id: 0,
+            playlistType: 'VOD',
+            uri: 'p2',
+            resolvedUri: 'p2',
+            mediaSequence: 0,
+            targetDuration: 10,
+            segments: [{
+              duration: 10,
+              resolvedUri: 'http://localhost:9876/0.ts',
+              timeline: 0,
+              uri: '0.ts'
+            }]
+          },
+          p3: {
+            resolvedUri: 'p3',
+            segments: []
+          }
+        },
+        'resolved and parsed unresolved playlist'
+      );
+      done();
+    }
+  });
+});
+
+QUnit.test('calls back with error if a playlist errors', function(assert) {
+  assert.expect(3);
+
+  const done = assert.async();
+  const playlists = [{
+    resolvedUri: 'p1',
+    segments: []
+  }, {
+    resolvedUri: 'p2'
+  }, {
+    resolvedUri: 'p3'
+  }];
+  const mimeTypes = [
+    'application/x-mpegURL',
+    'application/x-mpegURL',
+    'application/dash+xml'
+  ];
+
+  this.server.respondWith(
+    'GET',
+    'p2',
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ numSegments: 1 })]
+  );
+  this.server.respondWith('GET', 'p3', [500, STANDARD_HEADERS, '']);
+
+  resolvePlaylists({
+    playlists,
+    mimeTypes,
+    callback: (err, playlistsToParsed) => {
+      assert.ok(err, 'called back with error');
+      assert.equal(err.message, 'Request failed', 'correct error message');
+      assert.notOk(playlistsToParsed, 'did not pass back a result object');
+      done();
+    }
+  });
 });

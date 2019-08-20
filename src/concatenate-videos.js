@@ -494,7 +494,7 @@ export const checkForIncompatibility = (manifestObjects) => {
  * @param {function(Object, Object)} config.callback
  *        Callback function with error and playlist URI to resolved playlist objects map
  */
-const resolvePlaylists = ({ playlists, mimeTypes, callback }) => {
+export const resolvePlaylists = ({ playlists, mimeTypes, callback }) => {
   const playlistUris = playlists
     // if the segments are already resolved, don't need to request (DASH case)
     .filter((playlist) => !playlist.segments)
