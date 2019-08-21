@@ -127,22 +127,21 @@ export const parseManifest = ({ url, manifestString, mimeType }) => {
  * If only some playlists include resolution information, the function will only consider
  * those with resolution information.
  *
- * @param {Object[]} manifestObjects
- *        An array of manifest objects (in the format used by VHS)
+ * @param {Object[][]} manifestsPlaylists
+ *        An array of arrays of playlist objects
  * @param {number} targetVerticalResolution
  *        The vertical resolution to search for among playlists within each manifest
  *
  * @return {Object[]}
  *          An array of playlist objects, one from each of the provided manifests
  */
-export const chooseVideoPlaylists = (manifestObjects, targetVerticalResolution) => {
-  return manifestObjects.map((manifestObject) => {
-    // if the manifest is not a master, then it is the only rendition to use
-    if (!manifestObject.playlists) {
-      return manifestObject;
+export const chooseVideoPlaylists = (manifestsPlaylists, targetVerticalResolution) => {
+  return manifestsPlaylists.map((manifestPlaylists) => {
+    if (manifestPlaylists.length === 1) {
+      return manifestPlaylists[0];
     }
 
-    return manifestObject.playlists.reduce((acc, playlist) => {
+    return manifestPlaylists.reduce((acc, playlist) => {
       if (!acc) {
         return playlist;
       }
@@ -408,13 +407,16 @@ export const constructMasterManifest = ({ videoPlaylist, audioPlaylist }) => {
  * associating each playlist's resolvedUri to its respective codecs.
  *
  * @param {Object} manifest
- *        A master manifest object (in the format used by VHS)
+ *        A master or media manifest object (in the format used by VHS)
  *
  * @return {Object}
  *         Object associating playlists to their parsed codecs
  */
 export const codecsForPlaylists = (manifest) => {
-  return manifest.playlists.reduce((acc, playlist) => {
+  // handle master and media playlists
+  const playlists = manifest.playlists ? manifest.playlists : [manifest];
+
+  return playlists.reduce((acc, playlist) => {
     // Technically, there should always be the CODECS attribute (and an attributes
     // object). But if they don't exist (e.g., in a media playlist that hasn't had the
     // attributes object added, since m3u8-parser doesn't add the attributes object to
@@ -442,15 +444,12 @@ export const codecsForPlaylists = (manifest) => {
 };
 
 /**
- * Checks the VHS-formatted manifest objects for incompatibilities to see if they can be
- * concatenated together. The checks include:
+ * Removes unsupported playlists from each provided VHS-formatted manifest object. The
+ * checks to determine support include:
  *
- * - Presence of a rendition with both audio and video in each source (audio only and
- *   video only are not currently supported)
- * - Presence of either a demuxed audio playlist in each source or a muxed rendition in
- *   each source (to maintain consistency between sources)
- * - Availability of renditions with supported video codecs for browser's implementation
- *   of MSE (media source extensions)
+ * - Presence of both audio and video in the playlists (audio only and video only are not
+ *   currently supported), either as muxed or demuxed (via a default alt audio playlist)
+ * - Video codecs supported by the browser's MSE (media source extensions) implementation
  *
  * Note that these checks do not guarantee a successful concatenation operation. Limited
  * availability of information (e.g., no codec info for media manifests), and a lack of
@@ -458,19 +457,17 @@ export const codecsForPlaylists = (manifest) => {
  * operation. These are rarer cases though, and should be handled by the user.
  *
  * @param {Object[]} manifestObjects
- *        An array of manifest objects (in the format used by VHS)
+ *        An array of (master or media) manifest objects (in the format used by VHS)
  *
- * @return {(null|string)}
- *          null if no errors or a string with an error if one was detected
+ * @return {Object[][]}
+ *          An array of arrays containing supported playlists from each manifest object
  */
-export const checkForIncompatibility = (manifestObjects) => {
-  // remove any media playlists, since we have no codec info to use for the checks
-  manifestObjects = manifestObjects.filter((manifestObject) => {
-    return manifestObject.playlists;
-  });
-
+export const removeUnsupportedPlaylists = (manifestObjects) => {
   const codecsForPlaylist = {};
 
+  // Creating the codecsForPlaylist object separate from the main loop serves two
+  // purposes. Primarily, it provides for simpler loops. But it also saves on processing
+  // in the event that the same playlist is seen in multiple manifests (a valid case).
   manifestObjects.forEach((manifestObject) => {
     const playlistToCodecsMap = codecsForPlaylists(manifestObject);
 
@@ -481,8 +478,12 @@ export const checkForIncompatibility = (manifestObjects) => {
 
   // remove audio and video only playlists, as well as playlists with video codecs not
   // supported by the browser
-  const manifestPlaylists = manifestObjects.map((manifestObject) => {
-    return manifestObject.playlists.filter((playlist) => {
+  return manifestObjects.map((manifestObject) => {
+    // handle master and media playlists
+    const playlists =
+      manifestObject.playlists ? manifestObject.playlists : [manifestObject];
+
+    return playlists.filter((playlist) => {
       const codecs = codecsForPlaylist[playlist.resolvedUri];
 
       // Allow playlists with no specified codecs to pass through. Although the playlists
@@ -508,15 +509,6 @@ export const checkForIncompatibility = (manifestObjects) => {
       return true;
     });
   });
-
-  const manifestsWithSupportedPlaylists =
-    manifestPlaylists.filter((playlists) => playlists.length > 0);
-
-  if (manifestsWithSupportedPlaylists.length < manifestObjects.length) {
-    return 'Did not find a supported playlist for each manifest';
-  }
-
-  return null;
 };
 
 /**
@@ -621,16 +613,22 @@ const concatenateManifests = ({ manifests, targetVerticalResolution, callback })
     manifestString: manifest.response,
     mimeType: manifest.mimeType
   }));
-  const incompatibilityErrors = checkForIncompatibility(manifestObjects);
 
-  if (incompatibilityErrors) {
-    throw new Error(incompatibilityErrors);
-  }
+  const supportedPlaylists = removeUnsupportedPlaylists(manifestObjects);
+
+  supportedPlaylists.forEach((playlists) => {
+    if (playlists.length === 0) {
+      throw new Error('Did not find a supported playlist for each manifest');
+    }
+  });
 
   // Video renditions are assumed to be codec compatible, but may have different
   // resolutions. Choose the video rendition closest to the target resolution from each
   // manifest.
-  const videoPlaylists = chooseVideoPlaylists(manifestObjects, targetVerticalResolution);
+  const videoPlaylists = chooseVideoPlaylists(
+    supportedPlaylists,
+    targetVerticalResolution
+  );
 
   // A rendition with demuxed audio can't be concatenated with a rendition with muxed
   // audio. VHS assumes (based on how most media streaming formats work) that a rendition

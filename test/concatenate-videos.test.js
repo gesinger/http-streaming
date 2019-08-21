@@ -11,7 +11,7 @@ import {
   combinePlaylists,
   constructMasterManifest,
   codecsForPlaylists,
-  checkForIncompatibility,
+  removeUnsupportedPlaylists,
   resolvePlaylists
 } from '../src/concatenate-videos';
 import { useFakeEnvironment } from './test-helpers';
@@ -690,12 +690,16 @@ QUnit.test('chooses video playlists by target vertical resolution', function(ass
   const playlist1 = { attributes: { RESOLUTION: 1 } };
   const playlist2 = { attributes: { RESOLUTION: 719 } };
   const playlist3 = { attributes: { RESOLUTION: 722 } };
-  const manifestObject1 = { playlists: [playlist1, playlist2, playlist3] };
-  const manifestObject2 = { playlists: [playlist1, playlist2, playlist3] };
-  const manifestObject3 = { playlists: [playlist1, playlist2, playlist3] };
 
   assert.deepEqual(
-    chooseVideoPlaylists([manifestObject1, manifestObject2, manifestObject3], 720),
+    chooseVideoPlaylists(
+      [
+        [playlist1, playlist2, playlist3],
+        [playlist1, playlist2, playlist3],
+        [playlist1, playlist2, playlist3]
+      ],
+      720
+    ),
     [playlist2, playlist2, playlist2],
     'chose closest video playlists'
   );
@@ -705,12 +709,16 @@ QUnit.test('when no resolution, chooses video playlists by bandwidth', function(
   const playlist1 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH - 3 } };
   const playlist2 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH - 2 } };
   const playlist3 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH + 1 } };
-  const manifestObject1 = { playlists: [playlist1, playlist2, playlist3] };
-  const manifestObject2 = { playlists: [playlist1, playlist2, playlist3] };
-  const manifestObject3 = { playlists: [playlist1, playlist2, playlist3] };
 
   assert.deepEqual(
-    chooseVideoPlaylists([manifestObject1, manifestObject2, manifestObject3], 720),
+    chooseVideoPlaylists(
+      [
+        [playlist1, playlist2, playlist3],
+        [playlist1, playlist2, playlist3],
+        [playlist1, playlist2, playlist3]
+      ],
+      720
+    ),
     [playlist3, playlist3, playlist3],
     'chose closest video playlists'
   );
@@ -727,12 +735,16 @@ function(assert) {
     }
   };
   const playlist3 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH + 1 } };
-  const manifestObject1 = { playlists: [playlist3, playlist2, playlist1] };
-  const manifestObject2 = { playlists: [playlist2, playlist3, playlist1] };
-  const manifestObject3 = { playlists: [playlist1, playlist3, playlist2] };
 
   assert.deepEqual(
-    chooseVideoPlaylists([manifestObject1, manifestObject2, manifestObject3], 720),
+    chooseVideoPlaylists(
+      [
+        [playlist3, playlist2, playlist1],
+        [playlist2, playlist3, playlist1],
+        [playlist1, playlist3, playlist2]
+      ],
+      720
+    ),
     [playlist2, playlist2, playlist2],
     'chose video playlists with resolution info'
   );
@@ -1318,13 +1330,11 @@ function(assert) {
   );
 });
 
-QUnit.module('checkForIncompatibility');
+QUnit.module('removeUnsupportedPlaylists');
 
-QUnit.test(
-'checks that all manifests have a playlist with both audio and video',
-function(assert) {
-  assert.notOk(
-    checkForIncompatibility([{
+QUnit.test('removes manifests with only audio or video', function(assert) {
+  assert.deepEqual(
+    removeUnsupportedPlaylists([{
       playlists: [
         { resolvedUri: '1-1', attributes: { CODECS: 'avc1.4d400d' } },
         { resolvedUri: '1-2', attributes: { CODECS: 'mp4a.40.2' } },
@@ -1337,32 +1347,17 @@ function(assert) {
         { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
       ]
     }]),
-    'returned no error message'
-  );
-  assert.equal(
-    checkForIncompatibility([{
-      playlists: [
-        { resolvedUri: '1-1', attributes: { CODECS: 'avc1.4d400d' } },
-        { resolvedUri: '1-2', attributes: { CODECS: 'mp4a.40.2' } },
-        { resolvedUri: '1-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
-      ]
-    }, {
-      playlists: [
-        { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d' } },
-        { resolvedUri: '2-2', attributes: { CODECS: 'mp4a.40.2' } },
-        { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d' } }
-      ]
-    }]),
-    'Did not find a supported playlist for each manifest',
-    'returned error message'
+    [
+      [ { resolvedUri: '1-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ],
+      [ { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ]
+    ],
+    'removed audio and video only playlists'
   );
 });
 
-QUnit.test(
-'checks that all manifests have a playlist with an MSE supported video codec',
-function(assert) {
-  assert.notOk(
-    checkForIncompatibility([{
+QUnit.test('removes playlists without MSE supported video codec', function(assert) {
+  assert.deepEqual(
+    removeUnsupportedPlaylists([{
       playlists: [
         { resolvedUri: '1-1', attributes: { CODECS: 'avc1.4d400fake, mp4a.40.2' } },
         { resolvedUri: '1-2', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
@@ -1373,48 +1368,21 @@ function(assert) {
         { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
       ]
     }]),
-    'returned no error message'
-  );
-  assert.equal(
-    checkForIncompatibility([{
-      playlists: [
-        { resolvedUri: '1-1', attributes: { CODECS: 'avc1.4d400fake' } },
-        { resolvedUri: '1-2', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
-      ]
-    }, {
-      playlists: [
-        { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400fake' } },
-        { resolvedUri: '2-2', attributes: { CODECS: 'avc1.4d400fake, mp4a.40.2' } }
-      ]
-    }]),
-    'Did not find a supported playlist for each manifest',
-    'returned error message'
+    [
+      [ { resolvedUri: '1-2', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ],
+      [ { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ]
+    ],
+    'removed playlists without MSE supported video codec'
   );
 });
 
-QUnit.test('manifests without codecs attribute pass through', function(assert) {
-  assert.notOk(
-    checkForIncompatibility([{
+QUnit.test('passes through playlists without attributes object', function(assert) {
+  assert.deepEqual(
+    removeUnsupportedPlaylists([{
       playlists: [
-        // Technically not having codec info shouldn't be allowed, but it may be present
-        // in some playlists, and for now it's easier to be safe and pass through on
-        // compatibility check rather than auto-fail. This can be reconsidered in the
-        // future.
-        { resolvedUri: '1-1', attributes: {} }
-      ]
-    }, {
-      playlists: [
-        { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
-      ]
-    }]),
-    'returned no error message for missing CODECS attribute'
-  );
-  assert.notOk(
-    checkForIncompatibility([{
-      playlists: [
-        // Media playlists may not have the attributes object. It should be added by the
-        // VHS functions for aligning manifest properties, but that assumption may not
-        // always hold, so pass it through. This can be reconsidered in the future.
+        // Technically an attributes object and codec info should be required, but for now
+        // it's easier to be safe and pass through those playlists rather than auto-fail.
+        // This can be reconsidered in the future.
         { resolvedUri: '1-1' }
       ]
     }, {
@@ -1422,7 +1390,33 @@ QUnit.test('manifests without codecs attribute pass through', function(assert) {
         { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
       ]
     }]),
-    'returned no error message for no attributes object'
+    [
+      [ { resolvedUri: '1-1' } ],
+      [ { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ]
+    ],
+    'passed through playlists without attributes object'
+  );
+});
+
+QUnit.test('passes through playlists without codecs attribute', function(assert) {
+  assert.deepEqual(
+    removeUnsupportedPlaylists([{
+      playlists: [
+        // Technically codec info should be required, but for now it's easier to be safe
+        // and pass through those playlists rather than auto-fail. This can be
+        // reconsidered in the future.
+        { resolvedUri: '1-1', attributes: {} }
+      ]
+    }, {
+      playlists: [
+        { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
+      ]
+    }]),
+    [
+      [ { resolvedUri: '1-1', attributes: {} } ],
+      [ { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ]
+    ],
+    'passed through playlists without codecs attribute'
   );
 });
 
