@@ -463,28 +463,20 @@ export const codecsForPlaylists = (manifest) => {
  *          An array of arrays containing supported playlists from each manifest object
  */
 export const removeUnsupportedPlaylists = (manifestObjects) => {
-  const codecsForPlaylist = {};
-
-  // Creating the codecsForPlaylist object separate from the main loop serves two
-  // purposes. Primarily, it provides for simpler loops. But it also saves on processing
-  // in the event that the same playlist is seen in multiple manifests (a valid case).
-  manifestObjects.forEach((manifestObject) => {
-    const playlistToCodecsMap = codecsForPlaylists(manifestObject);
-
-    Object.keys(playlistToCodecsMap).forEach((playlistKey) => {
-      codecsForPlaylist[playlistKey] = playlistToCodecsMap[playlistKey];
-    });
-  });
-
   // remove audio and video only playlists, as well as playlists with video codecs not
   // supported by the browser
   return manifestObjects.map((manifestObject) => {
+    // Recreate the map for each manifest, as if it is reused for different manifests, and
+    // they each contain the same playlist (or one is a media and another is a master
+    // containing that media), then the information may be different depending on the
+    // manifest (e.g., one may have demuxed audio, the other video only).
+    const playlistToCodecsMap = codecsForPlaylists(manifestObject);
     // handle master and media playlists
     const playlists =
       manifestObject.playlists ? manifestObject.playlists : [manifestObject];
 
     return playlists.filter((playlist) => {
-      const codecs = codecsForPlaylist[playlist.resolvedUri];
+      const codecs = playlistToCodecsMap[playlist.resolvedUri];
 
       // Allow playlists with no specified codecs to pass through. Although the playlists
       // should have codec info, this prevents missing codec info from auto-failing.
@@ -501,7 +493,7 @@ export const removeUnsupportedPlaylists = (manifestObjects) => {
       if (window.MediaSource &&
           window.MediaSource.isTypeSupported &&
           !window.MediaSource.isTypeSupported(
-            // ignore audio for the MSE support check to mirror VHS' check
+            // ignore demuxed audio for the MSE support check to mirror VHS' check
             `video/mp4; codecs="${mapLegacyAvcCodecs(playlist.attributes.CODECS)}"`)) {
         return false;
       }
