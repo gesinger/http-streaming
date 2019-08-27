@@ -25,10 +25,11 @@ export const resolveUrl = function(baseURL, relativeURL) {
  *
  * @api private
  *
- * @param  {String} url - an url being requested
- * @param  {String} responseUrl - xhr response url result
+ * @param {boolean} handleManifestRedirect - whether to handle redirects
+ * @param {string} url - url being requested
+ * @param {string} responseUrl - xhr response url result
  *
- * @return {String}
+ * @return {string}
  */
 export const resolveManifestRedirect = (handleManifestRedirect, url, responseUrl) => {
   // To understand how the responseURL below is set and generated:

@@ -481,8 +481,8 @@ export const removeUnsupportedPlaylists = (manifestObjects) => {
       // Allow playlists with no specified codecs to pass through. Although the playlists
       // should have codec info, this prevents missing codec info from auto-failing.
       if (!codecs) {
-        videojs.log.warn(
-          `Missing codec info for playlist with URI: ${playlist.resolvedUri}`);
+        videojs.log.warn('Missing codec info for playlist with URI: ' +
+          playlist.resolvedUri);
         return true;
       }
 
@@ -492,9 +492,9 @@ export const removeUnsupportedPlaylists = (manifestObjects) => {
 
       if (window.MediaSource &&
           window.MediaSource.isTypeSupported &&
-          !window.MediaSource.isTypeSupported(
-            // ignore demuxed audio for the MSE support check to mirror VHS' check
-            `video/mp4; codecs="${mapLegacyAvcCodecs(playlist.attributes.CODECS)}"`)) {
+          // ignore demuxed audio for the MSE support check to mirror VHS' check
+          !window.MediaSource.isTypeSupported('video/mp4; codecs="' +
+            mapLegacyAvcCodecs(playlist.attributes.CODECS) + '"')) {
         return false;
       }
 
@@ -563,9 +563,11 @@ export const resolvePlaylists = ({ playlists, mimeTypes, callback }) => {
         mimeType
       });
 
-      origPlaylists.forEach((origPlaylist) => {
+      for (let j = 0; j < origPlaylists.length; j++) {
+        const origPlaylist = origPlaylists[j];
+
         origPlaylistsToParsed[origPlaylist.resolvedUri] = playlist;
-      });
+      }
     }
 
     callback(null, origPlaylistsToParsed);

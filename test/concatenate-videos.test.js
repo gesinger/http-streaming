@@ -725,30 +725,31 @@ QUnit.test('when no resolution, chooses video playlists by bandwidth', function(
 });
 
 QUnit.test(
-'when only partial resolution info, selects video playlist with info',
-function(assert) {
-  const playlist1 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH - 3 } };
-  const playlist2 = {
-    attributes: {
-      RESOLUTION: 1,
-      BANDWIDTH: config.INITIAL_BANDWIDTH - 2
-    }
-  };
-  const playlist3 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH + 1 } };
+  'when only partial resolution info, selects video playlist with info',
+  function(assert) {
+    const playlist1 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH - 3 } };
+    const playlist2 = {
+      attributes: {
+        RESOLUTION: 1,
+        BANDWIDTH: config.INITIAL_BANDWIDTH - 2
+      }
+    };
+    const playlist3 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH + 1 } };
 
-  assert.deepEqual(
-    chooseVideoPlaylists(
-      [
-        [playlist3, playlist2, playlist1],
-        [playlist2, playlist3, playlist1],
-        [playlist1, playlist3, playlist2]
-      ],
-      720
-    ),
-    [playlist2, playlist2, playlist2],
-    'chose video playlists with resolution info'
-  );
-});
+    assert.deepEqual(
+      chooseVideoPlaylists(
+        [
+          [playlist3, playlist2, playlist1],
+          [playlist2, playlist3, playlist1],
+          [playlist1, playlist3, playlist2]
+        ],
+        720
+      ),
+      [playlist2, playlist2, playlist2],
+      'chose video playlists with resolution info'
+    );
+  }
+);
 
 QUnit.module('chooseAudioPlaylists');
 
@@ -1115,71 +1116,74 @@ QUnit.test('creates master manifest from sole video playlist', function(assert) 
         }]
       }]
     },
-    'created master manifest');
+    'created master manifest'
+  );
 });
 
 QUnit.test(
-'creates media groups with demuxed audio if audio playlist is present',
-function(assert) {
-  const videoPlaylist = {
-    attributes: {},
-    segments: [{
-      uri: 'segment1.ts'
-    }, {
-      uri: 'segment2.ts'
-    }]
-  };
-  const audioPlaylist = {
-    segments: [{
-      uri: 'audio-segment1.ts'
-    }, {
-      uri: 'audio-segment2.ts'
-    }, {
-      uri: 'audio-segment.ts'
-    }]
-  };
-
-  assert.deepEqual(
-    constructMasterManifest({ videoPlaylist, audioPlaylist }),
-    {
-      mediaGroups: {
-        'AUDIO': {
-          audio: {
-            default: {
-              autoselect: true,
-              default: true,
-              language: '',
-              uri: 'combined-audio-playlists',
-              playlists: [{
-                segments: [{
-                  uri: 'audio-segment1.ts'
-                }, {
-                  uri: 'audio-segment2.ts'
-                }, {
-                  uri: 'audio-segment.ts'
-                }]
-              }]
-            }
-          }
-        },
-        'VIDEO': {},
-        'CLOSED-CAPTIONS': {},
-        'SUBTITLES': {}
-      },
-      uri: window.location.href,
-      playlists: [{
-        attributes: {
-          AUDIO: 'audio'
-        },
-        segments: [{
-          uri: 'segment1.ts'
-        }, {
-          uri: 'segment2.ts'
-        }]
+  'creates media groups with demuxed audio if audio playlist is present',
+  function(assert) {
+    const videoPlaylist = {
+      attributes: {},
+      segments: [{
+        uri: 'segment1.ts'
+      }, {
+        uri: 'segment2.ts'
       }]
-    },
-    'created master manifest with demuxed audio');
-});
+    };
+    const audioPlaylist = {
+      segments: [{
+        uri: 'audio-segment1.ts'
+      }, {
+        uri: 'audio-segment2.ts'
+      }, {
+        uri: 'audio-segment.ts'
+      }]
+    };
+
+    assert.deepEqual(
+      constructMasterManifest({ videoPlaylist, audioPlaylist }),
+      {
+        mediaGroups: {
+          'AUDIO': {
+            audio: {
+              default: {
+                autoselect: true,
+                default: true,
+                language: '',
+                uri: 'combined-audio-playlists',
+                playlists: [{
+                  segments: [{
+                    uri: 'audio-segment1.ts'
+                  }, {
+                    uri: 'audio-segment2.ts'
+                  }, {
+                    uri: 'audio-segment.ts'
+                  }]
+                }]
+              }
+            }
+          },
+          'VIDEO': {},
+          'CLOSED-CAPTIONS': {},
+          'SUBTITLES': {}
+        },
+        uri: window.location.href,
+        playlists: [{
+          attributes: {
+            AUDIO: 'audio'
+          },
+          segments: [{
+            uri: 'segment1.ts'
+          }, {
+            uri: 'segment2.ts'
+          }]
+        }]
+      },
+      'created master manifest with demuxed audio'
+    );
+  }
+);
 
 QUnit.module('codecsForPlaylists');
 
@@ -1274,61 +1278,62 @@ QUnit.test('uses audio codec from default alt audio playlist', function(assert) 
 });
 
 QUnit.test(
-'does not use audio codec from non default alt audio playlist',
-function(assert) {
-  const manifest = {
-    mediaGroups: {
-      AUDIO: {
-        au1: {
-          en: {
-            default: false,
-            playlists: [{
-              attributes: { CODECS: 'mp4a.40.2' }
-            }]
-          },
-          es: {
-            default: false,
-            playlists: [{
-              attributes: { CODECS: 'mp4a.40.5' }
-            }]
+  'does not use audio codec from non default alt audio playlist',
+  function(assert) {
+    const manifest = {
+      mediaGroups: {
+        AUDIO: {
+          au1: {
+            en: {
+              default: false,
+              playlists: [{
+                attributes: { CODECS: 'mp4a.40.2' }
+              }]
+            },
+            es: {
+              default: false,
+              playlists: [{
+                attributes: { CODECS: 'mp4a.40.5' }
+              }]
+            }
           }
         }
-      }
-    },
-    playlists: [{
-      resolvedUri: 'test1',
-      attributes: {
-        CODECS: 'avc1.4d400d',
-        AUDIO: 'au1'
-      }
-    }, {
-      resolvedUri: 'test2',
-      attributes: {
-        CODECS: 'avc1.4d401e',
-        AUDIO: 'au1'
-      }
-    }]
-  };
-
-  assert.deepEqual(
-    codecsForPlaylists(manifest),
-    {
-      test1: {
-        codecCount: 1,
-        audioProfile: null,
-        videoCodec: 'avc1',
-        videoObjectTypeIndicator: '.4d400d'
       },
-      test2: {
-        codecCount: 1,
-        audioProfile: null,
-        videoCodec: 'avc1',
-        videoObjectTypeIndicator: '.4d401e'
-      }
-    },
-    'did not use non default audio codec for either playlist'
-  );
-});
+      playlists: [{
+        resolvedUri: 'test1',
+        attributes: {
+          CODECS: 'avc1.4d400d',
+          AUDIO: 'au1'
+        }
+      }, {
+        resolvedUri: 'test2',
+        attributes: {
+          CODECS: 'avc1.4d401e',
+          AUDIO: 'au1'
+        }
+      }]
+    };
+
+    assert.deepEqual(
+      codecsForPlaylists(manifest),
+      {
+        test1: {
+          codecCount: 1,
+          audioProfile: null,
+          videoCodec: 'avc1',
+          videoObjectTypeIndicator: '.4d400d'
+        },
+        test2: {
+          codecCount: 1,
+          audioProfile: null,
+          videoCodec: 'avc1',
+          videoObjectTypeIndicator: '.4d401e'
+        }
+      },
+      'did not use non default audio codec for either playlist'
+    );
+  }
+);
 
 QUnit.module('removeUnsupportedPlaylists');
 
@@ -1536,7 +1541,7 @@ QUnit.test('makes requests for unresolved playlists', function(assert) {
             targetDuration: 10,
             segments: [{
               duration: 10,
-              resolvedUri: 'http://localhost:9876/0.ts',
+              resolvedUri: `${window.location.origin}/test/0.ts`,
               timeline: 0,
               uri: '0.ts'
             }]
