@@ -91,7 +91,7 @@ const getCodecs = function(media) {
   }
 };
 
-const audioProfileFromDefault = (master, audioGroupId) => {
+export const audioProfileFromDefault = (master, audioGroupId) => {
   if (!master.mediaGroups.AUDIO || !audioGroupId) {
     return null;
   }

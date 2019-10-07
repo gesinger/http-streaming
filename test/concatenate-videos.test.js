@@ -1,0 +1,1600 @@
+import videojs from 'video.js';
+import QUnit from 'qunit';
+import sinon from 'sinon';
+import window from 'global/window';
+import {
+  requestAll,
+  parseManifest,
+  concatenateVideos,
+  chooseVideoPlaylists,
+  chooseAudioPlaylists,
+  combinePlaylists,
+  constructMasterManifest,
+  codecsForPlaylists,
+  removeUnsupportedPlaylists,
+  resolvePlaylists
+} from '../src/concatenate-videos';
+import { useFakeEnvironment } from './test-helpers';
+import config from '../src/config';
+
+const STANDARD_HEADERS = { 'Content-Type': 'text/plain' };
+
+const hlsMasterPlaylist = ({
+  numPlaylists = 1,
+  playlistPrefix = 'playlist',
+  includeDemuxedAudio = false
+}) => {
+  const playlists = [];
+
+  for (let i = 0; i < numPlaylists; i++) {
+    const playlistPath = `${playlistPrefix}${i}.m3u8`;
+    const audioAttribute = includeDemuxedAudio ? ',AUDIO="audio"' : '';
+
+    playlists.push(`
+      #EXT-X-STREAM-INF:BANDWIDTH=${100 + i}${audioAttribute}
+      ${playlistPath}
+    `);
+  }
+
+  const audioGroup = includeDemuxedAudio ?
+    '#EXT-X-MEDIA:TYPE=AUDIO' +
+      ',GROUP-ID="audio",LANGUAGE="en",NAME="English"' +
+      ',AUTOSELECT=YES,DEFAULT=YES' +
+      `,URI="${playlistPrefix}-audio.m3u8"` :
+    '';
+
+  return `
+    #EXTM3U
+    #EXT-X-VERSION:3
+    ${audioGroup}
+
+    ${playlists.join('\n')}
+  `;
+};
+
+const hlsMediaPlaylist = ({
+  numSegments = 1,
+  segmentPrefix = '',
+  segmentDuration = 10,
+  targetDuration = 10
+}) => {
+  const segments = [];
+
+  for (let i = 0; i < numSegments; i++) {
+    const segmentPath = `${segmentPrefix}${i}.ts`;
+
+    segments.push(`
+      #EXTINF:${segmentDuration}
+      ${segmentPath}
+    `);
+  }
+
+  return `
+    #EXTM3U
+    #EXT-X-VERSION:3
+    #EXT-X-PLAYLIST-TYPE:VOD
+    #EXT-X-MEDIA-SEQUENCE:0
+    #EXT-X-TARGETDURATION:${targetDuration}
+    ${segments.join('\n')}
+    #EXT-X-ENDLIST
+  `;
+};
+
+const dashPlaylist = ({
+  numSegments = 1,
+  segmentDuration = 10
+}) => {
+  return `<?xml version="1.0"?>
+    <MPD
+      xmlns="urn:mpeg:dash:schema:mpd:2011"
+      profiles="urn:mpeg:dash:profile:full:2011"
+      minBufferTime="1.5"
+      mediaPresentationDuration="PT${numSegments * segmentDuration}S">
+      <Period>
+        <BaseURL>main/</BaseURL>
+        <AdaptationSet mimeType="video/mp4">
+          <BaseURL>video/</BaseURL>
+          <Representation
+            id="1080p"
+            bandwidth="6800000"
+            width="1920"
+            height="1080"
+            codecs="avc1.420015">
+            <BaseURL>1080/</BaseURL>
+            <SegmentTemplate
+              media="$RepresentationID$-segment-$Number$.mp4"
+              initialization="$RepresentationID$-init.mp4"
+              duration="${segmentDuration}"
+              timescale="1"
+              startNumber="0" />
+          </Representation>
+          <Representation
+            id="720p"
+            bandwidth="2400000"
+            width="1280"
+            height="720"
+            codecs="avc1.420015">
+            <BaseURL>720/</BaseURL>
+            <SegmentTemplate
+              media="$RepresentationID$-segment-$Number$.mp4"
+              initialization="$RepresentationID$-init.mp4"
+              duration="${segmentDuration}"
+              timescale="1"
+              startNumber="0" />
+          </Representation>
+        </AdaptationSet>
+        <AdaptationSet mimeType="audio/mp4">
+          <BaseURL>audio/</BaseURL>
+          <Representation id="audio" bandwidth="128000" codecs="mp4a.40.2">
+            <BaseURL>720/</BaseURL>
+            <SegmentTemplate
+              media="segment-$Number$.mp4"
+              initialization="$RepresentationID$-init.mp4"
+              duration="${segmentDuration}"
+              timescale="1"
+              startNumber="0" />
+          </Representation>
+        </AdaptationSet>
+      </Period>
+    </MPD>`;
+};
+
+const concatenateVideosPromise = ({ manifests, targetVerticalResolution }) => {
+  return new Promise((accept, reject) => {
+    concatenateVideos({
+      manifests,
+      targetVerticalResolution,
+      callback: (err, sourceObject) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        accept(sourceObject);
+      }
+    });
+  });
+};
+
+QUnit.module('concatenate-videos', {
+  beforeEach() {
+    this.realXhr = videojs.xhr.XMLHttpRequest;
+    this.server = sinon.fakeServer.create();
+    videojs.xhr.XMLHttpRequest = this.server.xhr;
+    this.server.autoRespond = true;
+  },
+
+  afterEach() {
+    this.server.restore();
+    videojs.xhr.XMLHttpRequest = this.realXhr;
+  }
+});
+
+QUnit.test('concatenates multiple videos into one', function(assert) {
+  const done = assert.async();
+  const manifests = [{
+    url: '/manifest1.m3u8',
+    mimeType: 'application/vnd.apple.mpegurl'
+  }, {
+    url: '/manifest2.m3u8',
+    mimeType: 'application/x-mpegurl'
+  }];
+
+  this.server.respondWith(
+    'GET',
+    manifests[0].url,
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ numSegments: 1 })]
+  );
+  this.server.respondWith(
+    'GET',
+    manifests[1].url,
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ segmentPrefix: 'm2s', numSegments: 1 })]
+  );
+
+  concatenateVideosPromise({
+    manifests,
+    targetVideoResolution: 720
+  }).then((sourceObject) => {
+    assert.deepEqual(
+      sourceObject,
+      {
+        uri: window.location.href,
+        mediaGroups: {
+          'AUDIO': {},
+          'VIDEO': {},
+          'CLOSED-CAPTIONS': {},
+          'SUBTITLES': {}
+        },
+        playlists: [{
+          attributes: {},
+          uri: 'combined-playlist',
+          resolvedUri: 'combined-playlist',
+          endList: true,
+          mediaSequence: 0,
+          discontinuitySequence: 0,
+          playlistType: 'VOD',
+          targetDuration: 10,
+          discontinuityStarts: [1],
+          segments: [{
+            duration: 10,
+            timeline: 0,
+            number: 0,
+            uri: '0.ts',
+            resolvedUri: `${window.location.origin}/0.ts`
+          }, {
+            duration: 10,
+            discontinuity: true,
+            timeline: 1,
+            number: 1,
+            uri: 'm2s0.ts',
+            resolvedUri: `${window.location.origin}/m2s0.ts`
+          }]
+        }]
+      },
+      'created concatenated video object'
+    );
+    done();
+  }).catch((e) => {
+    assert.ok(false, e);
+    done();
+  });
+});
+
+QUnit.test('concatenates HLS and DASH sources together', function(assert) {
+  const done = assert.async();
+  const manifests = [{
+    url: '/manifest1.m3u8',
+    mimeType: 'application/vnd.apple.mpegurl'
+  }, {
+    url: '/dash.mpd',
+    mimeType: 'application/dash+xml'
+  }];
+
+  this.server.respondWith(
+    'GET',
+    manifests[0].url,
+    [
+      200,
+      STANDARD_HEADERS,
+      hlsMasterPlaylist({
+        includeDemuxedAudio: true
+      })
+    ]
+  );
+  this.server.respondWith(
+    'GET',
+    manifests[0].url,
+    [200, STANDARD_HEADERS, hlsMasterPlaylist({ includeDemuxedAudio: true })]
+  );
+  this.server.respondWith(
+    'GET',
+    '/playlist0.m3u8',
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ numSegments: 1 })]
+  );
+  this.server.respondWith(
+    'GET',
+    '/playlist-audio.m3u8',
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ numSegments: 1, segmentPrefix: 'audio' })]
+  );
+  this.server.respondWith(
+    'GET',
+    manifests[1].url,
+    [200, STANDARD_HEADERS, dashPlaylist({ numSegments: 1 })]
+  );
+
+  const expectedAudioPlaylist = {
+    attributes: {
+      // bandwidth from the DASH playlist
+      BANDWIDTH: 128000,
+      // codecs from the DASH playlist (first playlist with CODECS attribute)
+      CODECS: 'mp4a.40.2'
+    },
+    discontinuitySequence: 0,
+    discontinuityStarts: [1],
+    endList: true,
+    mediaSequence: 0,
+    playlistType: 'VOD',
+    uri: 'combined-playlist-audio',
+    resolvedUri: 'combined-playlist-audio',
+    targetDuration: 10,
+    segments: [{
+      duration: 10,
+      resolvedUri: `${window.location.origin}/audio0.ts`,
+      timeline: 0,
+      number: 0,
+      uri: 'audio0.ts'
+    }, {
+      discontinuity: true,
+      duration: 10,
+      map: {
+        uri: 'audio-init.mp4',
+        resolvedUri: `${window.location.origin}/main/audio/720/audio-init.mp4`
+      },
+      number: 1,
+      timeline: 1,
+      uri: 'segment-0.mp4',
+      resolvedUri: `${window.location.origin}/main/audio/720/segment-0.mp4`
+    }]
+  };
+  const expectedAudioPlaylists = [expectedAudioPlaylist];
+
+  expectedAudioPlaylists['combined-playlist-audio'] = expectedAudioPlaylist;
+
+  concatenateVideosPromise({
+    manifests,
+    targetVideoResolution: 720
+  }).then((sourceObject) => {
+    assert.deepEqual(
+      sourceObject,
+      {
+        uri: window.location.href,
+        mediaGroups: {
+          'AUDIO': {
+            audio: {
+              default: {
+                autoselect: true,
+                default: true,
+                language: '',
+                playlists: expectedAudioPlaylists,
+                uri: 'combined-audio-playlists'
+              }
+            }
+          },
+          'VIDEO': {},
+          'CLOSED-CAPTIONS': {},
+          'SUBTITLES': {}
+        },
+        playlists: [{
+          attributes: {
+            // bandwidth from the DASH playlist
+            BANDWIDTH: 6800000,
+            // codecs from the DASH playlist (first playlist with CODECS attribute)
+            CODECS: 'avc1.420015',
+            AUDIO: 'audio'
+          },
+          uri: 'combined-playlist',
+          resolvedUri: 'combined-playlist',
+          endList: true,
+          mediaSequence: 0,
+          discontinuitySequence: 0,
+          playlistType: 'VOD',
+          targetDuration: 10,
+          discontinuityStarts: [1],
+          segments: [{
+            duration: 10,
+            timeline: 0,
+            uri: '0.ts',
+            number: 0,
+            resolvedUri: `${window.location.origin}/0.ts`
+          }, {
+            duration: 10,
+            discontinuity: true,
+            timeline: 1,
+            number: 1,
+            map: {
+              uri: '1080p-init.mp4',
+              resolvedUri: `${window.location.origin}/main/video/1080/1080p-init.mp4`
+            },
+            uri: '1080p-segment-0.mp4',
+            resolvedUri: `${window.location.origin}/main/video/1080/1080p-segment-0.mp4`
+          }]
+        }]
+      },
+      'created concatenated video object'
+    );
+    done();
+  }).catch((e) => {
+    assert.ok(false, e);
+    done();
+  });
+});
+
+QUnit.test('calls back with an error when no manifests passed in', function(assert) {
+  const done = assert.async();
+
+  concatenateVideosPromise({
+    manifests: [],
+    targetVideoResolution: 720
+  }).catch((error) => {
+    assert.equal(
+      error.message,
+      'No sources provided',
+      'called back with correct error message'
+    );
+    done();
+  });
+});
+
+QUnit.test('calls back with error when a manifest doesn\'t include a URL', function(assert) {
+  const done = assert.async();
+
+  concatenateVideosPromise({
+    manifests: [{
+      url: '/manifest1.m3u8',
+      mimeType: 'application/vnd.apple.mpegurl'
+    }, {
+      mimeType: 'application/x-mpegurl'
+    }],
+    targetVideoResolution: 720
+  }).catch((error) => {
+    assert.equal(
+      error.message,
+      'All manifests must include a URL',
+      'called back with correct error message'
+    );
+    done();
+  });
+});
+
+QUnit.test('calls back with an error when a manifest doesn\'t include a mime type', function(assert) {
+  const done = assert.async();
+
+  concatenateVideosPromise({
+    manifests: [{
+      url: '/manifest1.m3u8',
+      mimeType: 'application/vnd.apple.mpegurl'
+    }, {
+      url: '/manifest2.m3u8'
+    }],
+    targetVideoResolution: 720
+  }).catch((error) => {
+    assert.equal(
+      error.message,
+      'All manifests must include a mime type',
+      'called back with correct error message'
+    );
+    done();
+  });
+});
+
+QUnit.test('calls back with an error on request failure', function(assert) {
+  const done = assert.async();
+  const manifests = [{
+    url: '/manifest1.m3u8',
+    mimeType: 'application/vnd.apple.mpegurl'
+  }, {
+    url: '/manifest2.m3u8',
+    mimeType: 'application/x-mpegurl'
+  }];
+
+  this.server.respondWith(
+    'GET',
+    manifests[0].url,
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ numSegments: 1 })]
+  );
+  this.server.respondWith('GET', manifests[1].url, [500, STANDARD_HEADERS, '']);
+
+  concatenateVideosPromise({
+    manifests,
+    targetVideoResolution: 720
+  }).catch((error) => {
+    assert.equal(
+      error.message,
+      'Request failed',
+      'called back with correct error message'
+    );
+    assert.equal(error.request.status, 500, 'called back with correct error status');
+    done();
+  });
+});
+
+QUnit.module('requestAll', {
+  beforeEach(assert) {
+    this.env = useFakeEnvironment(assert);
+    this.clock = this.env.clock;
+    this.requests = this.env.requests;
+  },
+
+  afterEach() {
+    this.env.restore();
+  }
+});
+
+QUnit.test('waits for all requests to finish before calling back', function(assert) {
+  // fake environment adds an assertion
+  assert.expect(7);
+  const url1 = 'url1';
+  const url2 = 'url2';
+  const url3 = 'url3';
+  const response1 = 'response1';
+  const response2 = 'response2';
+  const response3 = 'response3';
+
+  requestAll([url1, url2, url3], (err, responses) => {
+    assert.notOk(err);
+    assert.equal(responses[url1], response1, 'correct response');
+    assert.equal(responses[url2], response2, 'correct response');
+    assert.equal(responses[url3], response3, 'correct response');
+  });
+
+  assert.equal(this.requests.length, 3, 'three requests');
+  this.requests.shift().respond(200, null, response1);
+  this.requests.shift().respond(200, null, response2);
+  this.requests.shift().respond(200, null, response3);
+});
+
+QUnit.test('calls back immediately on error', function(assert) {
+  // fake environment adds an assertion
+  assert.expect(5);
+
+  let request;
+
+  requestAll(['url1', 'url2'], (err, responses) => {
+    assert.deepEqual(
+      err,
+      { message: 'Request failed', request },
+      'calls back with error'
+    );
+    assert.notOk(responses, 'no responses object provided');
+  });
+
+  assert.equal(this.requests.length, 2, 'two requests');
+  request = this.requests.shift();
+  request.respond(500, null, 'error');
+});
+
+QUnit.test('does not call back on success after an error', function(assert) {
+  // fake environment adds an assertion
+  assert.expect(6);
+
+  let callbackCount = 0;
+  let request;
+
+  requestAll(['url1', 'url2'], (err, responses) => {
+    callbackCount++;
+    assert.deepEqual(
+      err,
+      { message: 'Request failed', request },
+      'calls back with error'
+    );
+    assert.notOk(responses, 'no responses object provided');
+  });
+
+  assert.equal(this.requests.length, 2, 'two requests');
+  request = this.requests.shift();
+  request.respond(500, null, 'error');
+  this.requests.shift().respond(200, null, 'success');
+  assert.equal(callbackCount, 1, 'only one callback');
+});
+
+QUnit.test('does not call back on error after an error', function(assert) {
+  // fake environment adds an assertion
+  assert.expect(6);
+
+  let callbackCount = 0;
+  let request;
+
+  requestAll(['url1', 'url2'], (err, responses) => {
+    callbackCount++;
+    assert.deepEqual(
+      err,
+      { message: 'Request failed', request },
+      'calls back with error'
+    );
+    assert.notOk(responses, 'no responses object provided');
+  });
+
+  assert.equal(this.requests.length, 2, 'two requests');
+  request = this.requests.shift();
+  request.respond(500, null, 'error');
+  this.requests.shift().respond(500, null, 'error');
+  assert.equal(callbackCount, 1, 'only one callback');
+});
+
+QUnit.module('parseManifest');
+
+QUnit.test('adds resolvedUri to media playlists of an HLS master', function(assert) {
+  const manifestObject = parseManifest({
+    url: 'http://test.com',
+    manifestString: hlsMasterPlaylist({
+      numPlaylists: 2
+    }),
+    mimeType: 'application/x-mpegURL'
+  });
+
+  assert.equal(manifestObject.playlists.length, 2, 'two playlists');
+  assert.equal(
+    manifestObject.playlists[0].resolvedUri,
+    'http://test.com/playlist0.m3u8',
+    'added resolvedUri to first media playlist'
+  );
+  assert.equal(
+    manifestObject.playlists[1].resolvedUri,
+    'http://test.com/playlist1.m3u8',
+    'added resolvedUri to second media playlist'
+  );
+});
+
+QUnit.test('adds resolvedUri to an HLS media manifest', function(assert) {
+  const manifestObject = parseManifest({
+    url: 'http://test.com',
+    manifestString: hlsMediaPlaylist({}),
+    mimeType: 'application/x-mpegURL'
+  });
+
+  assert.equal(
+    manifestObject.resolvedUri,
+    'http://test.com',
+    'added resolvedUri property to manifest object'
+  );
+});
+
+QUnit.test('adds resolvedUri to playlists of a DASH manifest', function(assert) {
+  const manifestObject = parseManifest({
+    url: 'http://test.com',
+    manifestString: dashPlaylist({}),
+    mimeType: 'application/dash+xml'
+  });
+
+  assert.equal(manifestObject.playlists.length, 2, 'two playlists');
+  assert.equal(
+    manifestObject.playlists[0].resolvedUri,
+    'http://test.com/placeholder-uri-0',
+    'added resolvedUri to playlist'
+  );
+  assert.equal(
+    manifestObject.playlists[1].resolvedUri,
+    'http://test.com/placeholder-uri-1',
+    'added resolvedUri to playlist'
+  );
+});
+
+QUnit.test('HLS master manifest media segment lists are not resolved', function(assert) {
+  const manifestObject = parseManifest({
+    url: 'http://test.com',
+    manifestString: hlsMasterPlaylist({
+      numPlaylists: 2
+    }),
+    mimeType: 'application/x-mpegURL'
+  });
+
+  assert.equal(manifestObject.playlists.length, 2, 'two playlists');
+  assert.notOk(manifestObject.playlists[0].segments, 'did not resolve segment list');
+  assert.notOk(manifestObject.playlists[1].segments, 'did not resolve segment list');
+});
+
+QUnit.test('HLS media manifest segment list is resolved', function(assert) {
+  const manifestObject = parseManifest({
+    url: 'http://test.com',
+    manifestString: hlsMediaPlaylist({}),
+    mimeType: 'application/x-mpegURL'
+  });
+
+  assert.notOk(manifestObject.playlists, 'no playlists');
+  assert.equal(
+    manifestObject.segments.length,
+    1,
+    'resolved segment list'
+  );
+});
+
+QUnit.test('DASH manifest segment lists are resolved', function(assert) {
+  const manifestObject = parseManifest({
+    url: 'http://test.com',
+    manifestString: dashPlaylist({}),
+    mimeType: 'application/dash+xml'
+  });
+
+  assert.equal(manifestObject.playlists.length, 2, 'two playlists');
+  assert.equal(
+    manifestObject.playlists[0].segments.length,
+    1,
+    'resolved segment list'
+  );
+  assert.equal(
+    manifestObject.playlists[1].segments.length,
+    1,
+    'resolved segment list'
+  );
+});
+
+QUnit.module('chooseVideoPlaylists');
+
+QUnit.test('chooses video playlists by target vertical resolution', function(assert) {
+  const playlist1 = { attributes: { RESOLUTION: 1 } };
+  const playlist2 = { attributes: { RESOLUTION: 719 } };
+  const playlist3 = { attributes: { RESOLUTION: 722 } };
+
+  assert.deepEqual(
+    chooseVideoPlaylists(
+      [
+        [playlist1, playlist2, playlist3],
+        [playlist1, playlist2, playlist3],
+        [playlist1, playlist2, playlist3]
+      ],
+      720
+    ),
+    [playlist2, playlist2, playlist2],
+    'chose closest video playlists'
+  );
+});
+
+QUnit.test('when no resolution, chooses video playlists by bandwidth', function(assert) {
+  const playlist1 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH - 3 } };
+  const playlist2 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH - 2 } };
+  const playlist3 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH + 1 } };
+
+  assert.deepEqual(
+    chooseVideoPlaylists(
+      [
+        [playlist1, playlist2, playlist3],
+        [playlist1, playlist2, playlist3],
+        [playlist1, playlist2, playlist3]
+      ],
+      720
+    ),
+    [playlist3, playlist3, playlist3],
+    'chose closest video playlists'
+  );
+});
+
+QUnit.test(
+  'when only partial resolution info, selects video playlist with info',
+  function(assert) {
+    const playlist1 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH - 3 } };
+    const playlist2 = {
+      attributes: {
+        RESOLUTION: 1,
+        BANDWIDTH: config.INITIAL_BANDWIDTH - 2
+      }
+    };
+    const playlist3 = { attributes: { BANDWIDTH: config.INITIAL_BANDWIDTH + 1 } };
+
+    assert.deepEqual(
+      chooseVideoPlaylists(
+        [
+          [playlist3, playlist2, playlist1],
+          [playlist2, playlist3, playlist1],
+          [playlist1, playlist3, playlist2]
+        ],
+        720
+      ),
+      [playlist2, playlist2, playlist2],
+      'chose video playlists with resolution info'
+    );
+  }
+);
+
+QUnit.module('chooseAudioPlaylists');
+
+QUnit.test('chooses default audio playlists for video playlists', function(assert) {
+  const audioPlaylist2Resolved = { test: 'case' };
+  const audioPlaylist1 = { default: true, resolvedUri: 'resolved-uri-1' };
+  const audioPlaylist2 = { default: true, playlists: [audioPlaylist2Resolved] };
+  const audioPlaylist3 = { default: true, resolvedUri: 'resolved-uri-3' };
+  const manifestObject1 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: audioPlaylist1,
+          es: { default: false, resolvedUri: 'resolved-uri' }
+        }
+      }
+    }
+  };
+  const manifestObject2 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, playlists: [] },
+          es: audioPlaylist2
+        }
+      }
+    }
+  };
+  const manifestObject3 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, resolvedUri: 'resolved-uri' },
+          es: audioPlaylist3
+        }
+      }
+    }
+  };
+  const videoPlaylist1 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist2 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist3 = { attributes: { AUDIO: 'audio1' } };
+
+  assert.deepEqual(
+    chooseAudioPlaylists(
+      [manifestObject1, manifestObject2, manifestObject3],
+      [videoPlaylist1, videoPlaylist2, videoPlaylist3]
+    ),
+    [audioPlaylist1, audioPlaylist2Resolved, audioPlaylist3],
+    'chose default audio playlists'
+  );
+});
+
+QUnit.test('throws error when missing audio playlist', function(assert) {
+  const audioPlaylist1 = { default: true, resolvedUri: 'resolved-uri-1' };
+  // missing both resolvedUri and playlists, but only for this audio playlist
+  const audioPlaylist2 = { default: true };
+  const audioPlaylist3 = { default: true, resolvedUri: 'resolved-uri-3' };
+  const manifestObject1 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: audioPlaylist1,
+          es: { default: false, resolvedUri: 'resolved-uri' }
+        }
+      }
+    }
+  };
+  const manifestObject2 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, playlists: [] },
+          es: audioPlaylist2
+        }
+      }
+    }
+  };
+  const manifestObject3 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, resolvedUri: 'resolved-uri' },
+          es: audioPlaylist3
+        }
+      }
+    }
+  };
+  const videoPlaylist1 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist2 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist3 = { attributes: { AUDIO: 'audio1' } };
+
+  assert.throws(
+    () => {
+      chooseAudioPlaylists(
+        [manifestObject1, manifestObject2, manifestObject3],
+        [videoPlaylist1, videoPlaylist2, videoPlaylist3]
+      );
+    },
+    new Error('Did not find matching audio playlists for all video playlists'),
+    'throws error when missing resolvedUri and playlist in matching audio playlist'
+  );
+});
+
+QUnit.test('throws error when missing default audio playlist', function(assert) {
+  const audioPlaylist2Resolved = { test: 'case' };
+  const audioPlaylist1 = { default: true, resolvedUri: 'resolved-uri-1' };
+  // not default
+  const audioPlaylist2 = { default: false, playlists: [audioPlaylist2Resolved] };
+  const audioPlaylist3 = { default: true, resolvedUri: 'resolved-uri-3' };
+  const manifestObject1 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: audioPlaylist1,
+          es: { default: false, resolvedUri: 'resolved-uri' }
+        }
+      }
+    }
+  };
+  const manifestObject2 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, playlists: [] },
+          es: audioPlaylist2
+        }
+      }
+    }
+  };
+  const manifestObject3 = {
+    mediaGroups: {
+      AUDIO: {
+        audio1: {
+          en: { default: false, resolvedUri: 'resolved-uri' },
+          es: audioPlaylist3
+        }
+      }
+    }
+  };
+  const videoPlaylist1 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist2 = { attributes: { AUDIO: 'audio1' } };
+  const videoPlaylist3 = { attributes: { AUDIO: 'audio1' } };
+
+  assert.throws(
+    () => {
+      chooseAudioPlaylists(
+        [manifestObject1, manifestObject2, manifestObject3],
+        [videoPlaylist1, videoPlaylist2, videoPlaylist3]
+      );
+    },
+    new Error('Did not find matching audio playlists for all video playlists'),
+    'throws error when missing a default audio playlist'
+  );
+});
+
+QUnit.module('combinePlaylists');
+
+QUnit.test('uses max BANDWIDTH and first playlist CODECS attributes', function(assert) {
+  const playlist1 = {
+    attributes: {
+      BANDWIDTH: 111,
+      CODECS: 'avc1.4d400e, mp4a.40.5',
+      extraFirst: 'test'
+    },
+    uri: '',
+    segments: []
+  };
+  const playlist2 = {
+    attributes: {
+      BANDWIDTH: 112,
+      CODECS: 'avc1.4d400d, mp4a.40.2',
+      extraSecond: 'test'
+    },
+    uri: '',
+    segments: []
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.deepEqual(
+    combinedPlaylist.attributes,
+    {
+      BANDWIDTH: 112,
+      CODECS: 'avc1.4d400e, mp4a.40.5'
+    },
+    'used CODECS attribute of the first playlist and largest BANDWIDTH attribute'
+  );
+});
+
+QUnit.test('provides uri and resolvedUri', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    segments: []
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    segments: []
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.equal(
+    combinedPlaylist.uri,
+    'combined-playlist',
+    'provided uri for combined playlist'
+  );
+  assert.equal(
+    combinedPlaylist.resolvedUri,
+    'combined-playlist',
+    'provided resolvedUri for combined playlist'
+  );
+});
+
+QUnit.test('uses largest target duration', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    targetDuration: 10,
+    segments: [{
+      // segment duration should be ignored
+      duration: 12
+    }]
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    targetDuration: 11,
+    segments: [{
+      // segment duration should be ignored
+      duration: 13
+    }]
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.equal(combinedPlaylist.targetDuration, 11, 'used largest target duration');
+});
+
+QUnit.test('adds discontinuity between playlists', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    segments: [{
+      uri: 'uri1-1.ts'
+    }, {
+      uri: 'uri1-2.ts'
+    }]
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    segments: [{
+      uri: 'uri2-1.ts'
+    }, {
+      uri: 'uri2-2.ts'
+    }]
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.deepEqual(
+    combinedPlaylist.segments,
+    [
+      { uri: 'uri1-1.ts', number: 0, timeline: 0 },
+      { uri: 'uri1-2.ts', number: 1, timeline: 0 },
+      { discontinuity: true, uri: 'uri2-1.ts', number: 2, timeline: 1 },
+      { uri: 'uri2-2.ts', number: 3, timeline: 1 }
+    ],
+    'added discontinuity between playlists'
+  );
+});
+
+QUnit.test('ignores playlist timeline values', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    segments: [{
+      timeline: 3,
+      uri: 'uri1-1.ts'
+    }, {
+      timeline: 3,
+      uri: 'uri1-2.ts'
+    }]
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    segments: [{
+      timeline: 7,
+      uri: 'uri2-1.ts'
+    }, {
+      timeline: 7,
+      uri: 'uri2-2.ts'
+    }]
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.deepEqual(
+    combinedPlaylist.segments,
+    [
+      { uri: 'uri1-1.ts', number: 0, timeline: 0 },
+      { uri: 'uri1-2.ts', number: 1, timeline: 0 },
+      { discontinuity: true, uri: 'uri2-1.ts', number: 2, timeline: 1 },
+      { uri: 'uri2-2.ts', number: 3, timeline: 1 }
+    ],
+    'added discontinuity between playlists'
+  );
+});
+
+QUnit.test('does not ignore discontinuity within playlist', function(assert) {
+  const playlist1 = {
+    uri: 'uri1',
+    segments: [{
+      timeline: 3,
+      uri: 'uri1-1.ts'
+    }, {
+      timeline: 3,
+      uri: 'uri1-2.ts'
+    }]
+  };
+  const playlist2 = {
+    uri: 'uri2',
+    segments: [{
+      timeline: 7,
+      uri: 'uri2-1.ts'
+    }, {
+      discontinuity: true,
+      timeline: 8,
+      uri: 'uri2-2.ts'
+    }]
+  };
+  const combinedPlaylist = combinePlaylists({ playlists: [playlist1, playlist2] });
+
+  assert.deepEqual(
+    combinedPlaylist.segments,
+    [
+      { uri: 'uri1-1.ts', number: 0, timeline: 0 },
+      { uri: 'uri1-2.ts', number: 1, timeline: 0 },
+      { discontinuity: true, uri: 'uri2-1.ts', number: 2, timeline: 1 },
+      { discontinuity: true, uri: 'uri2-2.ts', number: 3, timeline: 2 }
+    ],
+    'made use of discontinuity within playlist'
+  );
+});
+
+QUnit.module('constructMasterManifest');
+
+QUnit.test('creates master manifest from sole video playlist', function(assert) {
+  const videoPlaylist = {
+    attributes: {},
+    segments: [{
+      uri: 'segment1.ts'
+    }, {
+      uri: 'segment2.ts'
+    }]
+  };
+
+  assert.deepEqual(
+    constructMasterManifest({ videoPlaylist }),
+    {
+      mediaGroups: {
+        'AUDIO': {},
+        'VIDEO': {},
+        'CLOSED-CAPTIONS': {},
+        'SUBTITLES': {}
+      },
+      uri: window.location.href,
+      playlists: [{
+        attributes: {},
+        segments: [{
+          uri: 'segment1.ts'
+        }, {
+          uri: 'segment2.ts'
+        }]
+      }]
+    },
+    'created master manifest'
+  );
+});
+
+QUnit.test(
+  'creates media groups with demuxed audio if audio playlist is present',
+  function(assert) {
+    const videoPlaylist = {
+      attributes: {},
+      segments: [{
+        uri: 'segment1.ts'
+      }, {
+        uri: 'segment2.ts'
+      }]
+    };
+    const audioPlaylist = {
+      segments: [{
+        uri: 'audio-segment1.ts'
+      }, {
+        uri: 'audio-segment2.ts'
+      }, {
+        uri: 'audio-segment.ts'
+      }]
+    };
+
+    assert.deepEqual(
+      constructMasterManifest({ videoPlaylist, audioPlaylist }),
+      {
+        mediaGroups: {
+          'AUDIO': {
+            audio: {
+              default: {
+                autoselect: true,
+                default: true,
+                language: '',
+                uri: 'combined-audio-playlists',
+                playlists: [{
+                  segments: [{
+                    uri: 'audio-segment1.ts'
+                  }, {
+                    uri: 'audio-segment2.ts'
+                  }, {
+                    uri: 'audio-segment.ts'
+                  }]
+                }]
+              }
+            }
+          },
+          'VIDEO': {},
+          'CLOSED-CAPTIONS': {},
+          'SUBTITLES': {}
+        },
+        uri: window.location.href,
+        playlists: [{
+          attributes: {
+            AUDIO: 'audio'
+          },
+          segments: [{
+            uri: 'segment1.ts'
+          }, {
+            uri: 'segment2.ts'
+          }]
+        }]
+      },
+      'created master manifest with demuxed audio'
+    );
+  }
+);
+
+QUnit.module('codecsForPlaylists');
+
+QUnit.test('returns object associating playlists to codecs', function(assert) {
+  const manifest = {
+    playlists: [{
+      resolvedUri: 'test1',
+      attributes: {
+        CODECS: 'avc1.4d400d, mp4a.40.2'
+      }
+    }, {
+      resolvedUri: 'test2',
+      attributes: {
+        CODECS: 'mp4a.40.5,avc1.4d401e'
+      }
+    }]
+  };
+
+  assert.deepEqual(
+    codecsForPlaylists(manifest),
+    {
+      test1: {
+        codecCount: 2,
+        audioProfile: '2',
+        videoCodec: 'avc1',
+        videoObjectTypeIndicator: '.4d400d'
+      },
+      test2: {
+        codecCount: 2,
+        audioProfile: '5',
+        videoCodec: 'avc1',
+        videoObjectTypeIndicator: '.4d401e'
+      }
+    },
+    'returned object associating playlists to codecs'
+  );
+});
+
+QUnit.test('uses audio codec from default alt audio playlist', function(assert) {
+  const manifest = {
+    mediaGroups: {
+      AUDIO: {
+        au1: {
+          en: {
+            default: false,
+            playlists: [{
+              attributes: { CODECS: 'mp4a.40.2' }
+            }]
+          },
+          es: {
+            default: true,
+            playlists: [{
+              attributes: { CODECS: 'mp4a.40.5' }
+            }]
+          }
+        }
+      }
+    },
+    playlists: [{
+      resolvedUri: 'test1',
+      attributes: {
+        CODECS: 'avc1.4d400d',
+        AUDIO: 'au1'
+      }
+    }, {
+      resolvedUri: 'test2',
+      attributes: {
+        CODECS: 'avc1.4d401e',
+        AUDIO: 'au1'
+      }
+    }]
+  };
+
+  assert.deepEqual(
+    codecsForPlaylists(manifest),
+    {
+      test1: {
+        codecCount: 2,
+        audioProfile: '5',
+        videoCodec: 'avc1',
+        videoObjectTypeIndicator: '.4d400d'
+      },
+      test2: {
+        codecCount: 2,
+        audioProfile: '5',
+        videoCodec: 'avc1',
+        videoObjectTypeIndicator: '.4d401e'
+      }
+    },
+    'used default audio codec for both playlists'
+  );
+});
+
+QUnit.test(
+  'does not use audio codec from non default alt audio playlist',
+  function(assert) {
+    const manifest = {
+      mediaGroups: {
+        AUDIO: {
+          au1: {
+            en: {
+              default: false,
+              playlists: [{
+                attributes: { CODECS: 'mp4a.40.2' }
+              }]
+            },
+            es: {
+              default: false,
+              playlists: [{
+                attributes: { CODECS: 'mp4a.40.5' }
+              }]
+            }
+          }
+        }
+      },
+      playlists: [{
+        resolvedUri: 'test1',
+        attributes: {
+          CODECS: 'avc1.4d400d',
+          AUDIO: 'au1'
+        }
+      }, {
+        resolvedUri: 'test2',
+        attributes: {
+          CODECS: 'avc1.4d401e',
+          AUDIO: 'au1'
+        }
+      }]
+    };
+
+    assert.deepEqual(
+      codecsForPlaylists(manifest),
+      {
+        test1: {
+          codecCount: 1,
+          audioProfile: null,
+          videoCodec: 'avc1',
+          videoObjectTypeIndicator: '.4d400d'
+        },
+        test2: {
+          codecCount: 1,
+          audioProfile: null,
+          videoCodec: 'avc1',
+          videoObjectTypeIndicator: '.4d401e'
+        }
+      },
+      'did not use non default audio codec for either playlist'
+    );
+  }
+);
+
+QUnit.module('removeUnsupportedPlaylists');
+
+QUnit.test('removes manifests with only audio or video', function(assert) {
+  assert.deepEqual(
+    removeUnsupportedPlaylists([{
+      playlists: [
+        { resolvedUri: '1-1', attributes: { CODECS: 'avc1.4d400d' } },
+        { resolvedUri: '1-2', attributes: { CODECS: 'mp4a.40.2' } },
+        { resolvedUri: '1-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
+      ]
+    }, {
+      playlists: [
+        { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d' } },
+        { resolvedUri: '2-2', attributes: { CODECS: 'mp4a.40.2' } },
+        { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
+      ]
+    }]),
+    [
+      [ { resolvedUri: '1-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ],
+      [ { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ]
+    ],
+    'removed audio and video only playlists'
+  );
+});
+
+QUnit.test('removes playlists without MSE supported video codec', function(assert) {
+  assert.deepEqual(
+    removeUnsupportedPlaylists([{
+      playlists: [
+        { resolvedUri: '1-1', attributes: { CODECS: 'avc1.4d400fake, mp4a.40.2' } },
+        { resolvedUri: '1-2', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
+      ]
+    }, {
+      playlists: [
+        { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400fake, mp4a.40.2' } },
+        { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
+      ]
+    }]),
+    [
+      [ { resolvedUri: '1-2', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ],
+      [ { resolvedUri: '2-3', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ]
+    ],
+    'removed playlists without MSE supported video codec'
+  );
+});
+
+QUnit.test('passes through playlists without attributes object', function(assert) {
+  assert.deepEqual(
+    removeUnsupportedPlaylists([{
+      playlists: [
+        // Technically an attributes object and codec info should be required, but for now
+        // it's easier to be safe and pass through those playlists rather than auto-fail.
+        // This can be reconsidered in the future.
+        { resolvedUri: '1-1' }
+      ]
+    }, {
+      playlists: [
+        { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
+      ]
+    }]),
+    [
+      [ { resolvedUri: '1-1' } ],
+      [ { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ]
+    ],
+    'passed through playlists without attributes object'
+  );
+});
+
+QUnit.test('passes through playlists without codecs attribute', function(assert) {
+  assert.deepEqual(
+    removeUnsupportedPlaylists([{
+      playlists: [
+        // Technically codec info should be required, but for now it's easier to be safe
+        // and pass through those playlists rather than auto-fail. This can be
+        // reconsidered in the future.
+        { resolvedUri: '1-1', attributes: {} }
+      ]
+    }, {
+      playlists: [
+        { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } }
+      ]
+    }]),
+    [
+      [ { resolvedUri: '1-1', attributes: {} } ],
+      [ { resolvedUri: '2-1', attributes: { CODECS: 'avc1.4d400d, mp4a.40.2' } } ]
+    ],
+    'passed through playlists without codecs attribute'
+  );
+});
+
+QUnit.module('resolvePlaylists', {
+  beforeEach() {
+    this.realXhr = videojs.xhr.XMLHttpRequest;
+    this.server = sinon.fakeServer.create();
+    videojs.xhr.XMLHttpRequest = this.server.xhr;
+    this.server.autoRespond = true;
+  },
+
+  afterEach() {
+    this.server.restore();
+    videojs.xhr.XMLHttpRequest = this.realXhr;
+  }
+});
+
+QUnit.test('makes no requests when playlists already resolved', function(assert) {
+  assert.expect(3);
+
+  const done = assert.async();
+  const playlists = [{
+    resolvedUri: 'p1',
+    segments: []
+  }, {
+    resolvedUri: 'p2',
+    segments: []
+  }, {
+    resolvedUri: 'p3',
+    segments: []
+  }];
+  const mimeTypes = [
+    'application/x-mpegURL',
+    'application/x-mpegURL',
+    'application/dash+xml'
+  ];
+
+  resolvePlaylists({
+    playlists,
+    mimeTypes,
+    callback: (err, playlistsToParsed) => {
+      assert.notOk(err, 'no error');
+      assert.equal(this.server.requests.length, 0, 'made no requests');
+      assert.deepEqual(
+        playlistsToParsed,
+        {
+          p1: {
+            resolvedUri: 'p1',
+            segments: []
+          },
+          p2: {
+            resolvedUri: 'p2',
+            segments: []
+          },
+          p3: {
+            resolvedUri: 'p3',
+            segments: []
+          }
+        },
+        'returned playlists to parsed object'
+      );
+      done();
+    }
+  });
+});
+
+QUnit.test('makes requests for unresolved playlists', function(assert) {
+  assert.expect(4);
+
+  const done = assert.async();
+  const playlists = [{
+    resolvedUri: 'p1',
+    segments: []
+  }, {
+    resolvedUri: 'p2'
+  }, {
+    resolvedUri: 'p3',
+    segments: []
+  }];
+  const mimeTypes = [
+    'application/x-mpegURL',
+    'application/x-mpegURL',
+    'application/dash+xml'
+  ];
+
+  this.server.respondWith(
+    'GET',
+    'p2',
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ numSegments: 1 })]
+  );
+
+  resolvePlaylists({
+    playlists,
+    mimeTypes,
+    callback: (err, playlistsToParsed) => {
+      assert.notOk(err, 'no error');
+      assert.equal(this.server.requests.length, 1, 'made one request');
+      assert.equal(this.server.requests[0].url, 'p2', 'made request for p2');
+      assert.deepEqual(
+        playlistsToParsed,
+        {
+          p1: {
+            resolvedUri: 'p1',
+            segments: []
+          },
+          p2: {
+            allowCache: true,
+            attributes: {},
+            discontinuitySequence: 0,
+            discontinuityStarts: [],
+            endList: true,
+            id: 0,
+            playlistType: 'VOD',
+            uri: 'p2',
+            resolvedUri: 'p2',
+            mediaSequence: 0,
+            targetDuration: 10,
+            segments: [{
+              duration: 10,
+              resolvedUri: `${window.location.origin}/test/0.ts`,
+              timeline: 0,
+              uri: '0.ts'
+            }]
+          },
+          p3: {
+            resolvedUri: 'p3',
+            segments: []
+          }
+        },
+        'resolved and parsed unresolved playlist'
+      );
+      done();
+    }
+  });
+});
+
+QUnit.test('calls back with error if a playlist errors', function(assert) {
+  assert.expect(3);
+
+  const done = assert.async();
+  const playlists = [{
+    resolvedUri: 'p1',
+    segments: []
+  }, {
+    resolvedUri: 'p2'
+  }, {
+    resolvedUri: 'p3'
+  }];
+  const mimeTypes = [
+    'application/x-mpegURL',
+    'application/x-mpegURL',
+    'application/dash+xml'
+  ];
+
+  this.server.respondWith(
+    'GET',
+    'p2',
+    [200, STANDARD_HEADERS, hlsMediaPlaylist({ numSegments: 1 })]
+  );
+  this.server.respondWith('GET', 'p3', [500, STANDARD_HEADERS, '']);
+
+  resolvePlaylists({
+    playlists,
+    mimeTypes,
+    callback: (err, playlistsToParsed) => {
+      assert.ok(err, 'called back with error');
+      assert.equal(err.message, 'Request failed', 'correct error message');
+      assert.notOk(playlistsToParsed, 'did not pass back a result object');
+      done();
+    }
+  });
+});

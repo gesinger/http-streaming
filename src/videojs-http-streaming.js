@@ -35,6 +35,8 @@ import {version as m3u8Version} from 'm3u8-parser/package.json';
 import {version as aesVersion} from 'aes-decrypter/package.json';
 // import needed to register middleware
 import './middleware-set-current-time';
+import { concatenateVideos } from './concatenate-videos';
+import { simpleTypeFromSourceType } from './util/media-types';
 
 const Hls = {
   PlaylistLoader,
@@ -81,33 +83,6 @@ const Hls = {
 });
 
 export const LOCAL_STORAGE_KEY = 'videojs-vhs';
-
-const simpleTypeFromSourceType = (type) => {
-  const mpegurlRE = /^(audio|video|application)\/(x-|vnd\.apple\.)?mpegurl/i;
-
-  if (mpegurlRE.test(type)) {
-    return 'hls';
-  }
-
-  const dashRE = /^application\/dash\+xml/i;
-
-  if (dashRE.test(type)) {
-    return 'dash';
-  }
-
-  // Denotes the special case of a pre-parsed manifest object passed in instead of the
-  // traditional source URL.
-  //
-  // See https://en.wikipedia.org/wiki/Media_type for details on specifying media types.
-  //
-  // In this case, vnd is for vendor, VHS is for this project, and the +json suffix
-  // identifies the structure of the media type.
-  if (type === 'application/vnd.vhs+json') {
-    return 'vhs-json';
-  }
-
-  return null;
-};
 
 /**
  * Updates the selectedIndex of the QualityLevelList when a mediachange happens in hls.
@@ -899,6 +874,7 @@ if (supportsNativeMediaSources()) {
 videojs.HlsHandler = HlsHandler;
 videojs.HlsSourceHandler = HlsSourceHandler;
 videojs.Hls = Hls;
+videojs.Hls.concatenateVideos = concatenateVideos;
 if (!videojs.use) {
   videojs.registerComponent('Hls', Hls);
 }
