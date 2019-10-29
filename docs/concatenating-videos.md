@@ -4,6 +4,7 @@
 
 - [Purpose](#purpose)
 - [Method](#method)
+- [DRM](#drm)
 - [Limitations](#limitations)
 - [Examples](#examples)
   - [Two of the same DASH source](#two-of-the-same-dash-source)
@@ -26,6 +27,9 @@ There are probably many other use-cases as well, but these are a few of the more
 A few approaches can be taken to concatenate videos together, including combining manifests into a new manifest string, and passing that in as a data URI. However, the method chosen for the concatenate-videos module is to use the VHS source parsers (m3u8-parser and mpd-parser at the moment), and to combine those objects into a single object which is then passed as JSON via a data URI to VHS: https://github.com/videojs/http-streaming/pull/649
 
 To use the concatenate-videos module, all that needs to be done is to call the function `concatenateVideos` and wait for the asynchronous operation to finish. The operation is asynchronous to allow for downloading of the manifests.
+
+## DRM
+
 
 ## Limitations
 

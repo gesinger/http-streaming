@@ -14,6 +14,8 @@ import {
 import { parseMasterXml } from './dash-playlist-loader';
 import { resolveUrl } from './resolve-url';
 
+const WIDEVINE_KEY_SYSTEM_STRING = 'com.widevine.alpha';
+
 /**
  * Requests all of the urls provided, then calls back.
  *
@@ -576,6 +578,203 @@ export const resolvePlaylists = ({ playlists, mimeTypes, callback }) => {
 };
 
 /**
+ * Creates a function that initializes media key sessions in videojs-contrib-eme
+ *
+ * @param {string} pssh
+ *        The Program System Specific Header for the session
+ * @param {string} audioContentType
+ *        The audio MIME type, including codec info
+ *        @see {@link https://www.w3.org/TR/html51/semantics-embedded-content.html#mime-types|Mime Types}
+ * @param {string} videoContentType
+ *        The video MIME type, including codec info
+ *        @see {@link https://www.w3.org/TR/html51/semantics-embedded-content.html#mime-types|Mime Types}
+ * @param {string} [url]
+ *        URL to the license
+ * @param {function()} [getLicense]
+ *        Function to retrieve the license
+ * @return {function()}
+ *         Function that initializes media key session in videojs-contrib-eme
+ */
+export const createInitializeMediaKeysFunction = ({
+  pssh,
+  audioContentType,
+  videoContentType,
+  url,
+  getLicense
+}) => {
+  return (player) => {
+    player.eme.initializeMediaKeys({
+      keySystems: {
+        'com.widevine.alpha': {
+          audioContentType,
+          videoContentType,
+          pssh,
+          // provide both URL and getLicense function, as the user can provide
+          // either
+          url,
+          getLicense
+        }
+      }
+    });
+  };
+};
+
+/**
+ * @typedef {Object} AudioAndVideoTypes
+ * @property {String} audio
+ *           Audio MIME type
+ * @property {String} video
+ *           Video MIME type
+ */
+
+/**
+ * Returns a function that initializes all key sessions for EME and configures
+ * videojs-contrib-eme to retrieve licenses for encrypted content. This function is meant
+ * to be called after setting a player source to ensure that the session is associated
+ * with the correct source.
+ *
+ * @param {Object[]} videoPlaylists
+ *        An array of video playlists
+ * @param {Object[]} audioPlaylists
+ *        An array of audio playlists
+ * @param {AudioAndVideoTypes[]} audioAndVideoTypes
+ *        An array of audio and video MIME types with codecs
+ *        @see {@link https://www.w3.org/TR/encrypted-media/#dom-mediakeysystemmediacapability-contenttype|contentType}
+ *        @see {@link https://www.w3.org/TR/html51/semantics-embedded-content.html#mime-types|Mime Types}
+ * @return {function()} initializeKeySystems
+ *         Function to call after setting source to initialize EME for DRMed sources
+ */
+export const createInitializeKeySystemsFunction = ({
+  videoPlaylists,
+  audioPlaylists,
+  audioAndVideoTypes,
+  keySystems
+}) => {
+  const initializeKeySystemsFunctions = [];
+
+  // video and audio playlist counts should match, so either length can be used
+  for (let i = 0; i < videoPlaylists.length; i++) {
+    const keySystemsConfig = keySystems[i];
+
+    // this handles both the case of no DRMed content and DRMed mixed with unencrypted
+    // content
+    if (!keySystemsConfig) {
+      continue;
+    }
+
+    const widevineKeySystem = keySystemsConfig[WIDEVINE_KEY_SYSTEM_STRING];
+
+    // at the moment, only widevine is supported
+    if (!widevineKeySystem) {
+      continue;
+    }
+
+    if (!audioAndVideoTypes[i]) {
+      // Need to have the MIME types for the capabilities configuration of
+      // requestMediaKeySystemAccess. If they are not available, skip the configuration.
+      //
+      // @see {@link https://www.w3.org/TR/encrypted-media/#dom-mediakeysystemmediacapability-contenttype|contentType}
+      continue;
+    }
+
+    const videoPlaylist = videoPlaylists[i];
+    const audioPlaylist = audioPlaylists[i];
+    const videoPssh = videoPlaylist.contentProtection &&
+      videoPlaylist.contentProtection[WIDEVINE_KEY_SYSTEM_STRING] ?
+      videoPlaylist.contentProtection[WIDEVINE_KEY_SYSTEM_STRING].pssh : null;
+    const audioPssh = audioPlaylist.contentProtection &&
+      audioPlaylist.contentProtection[WIDEVINE_KEY_SYSTEM_STRING] ?
+      audioPlaylist.contentProtection[WIDEVINE_KEY_SYSTEM_STRING].pssh : null;
+    const audioType = audioAndVideoTypes[i].audio;
+    const videoType = audioAndVideoTypes[i].video;
+
+    // if audio and video have the same pssh, videojs-contrib-eme will dedupe
+    if (videoPssh) {
+      initializeKeySystemsFunctions.push(createInitializeMediaKeysFunction({
+        pssh: videoPssh,
+        audioContentType: audioType,
+        videoContentType: videoType,
+        url: widevineKeySystem.url,
+        getLicense: widevineKeySystem.getLicense
+      }));
+    }
+
+    if (audioPssh) {
+      initializeKeySystemsFunctions.push(createInitializeMediaKeysFunction({
+        pssh: audioPssh,
+        audioContentType: audioType,
+        videoContentType: videoType,
+        // audio and video share the same function and URL, as there aren't separate
+        // audio/video params available in VHS yet
+        url: widevineKeySystem.url,
+        getLicense: widevineKeySystem.getLicense
+      }));
+    }
+  }
+
+  return (player) => {
+    initializeKeySystemsFunctions.forEach((initializeKeySystemsFunction) => {
+      initializeKeySystemsFunction(player);
+    });
+  };
+};
+
+/**
+ * Returns an array of AudioAndVideoTypes, where each AudioAndVideoTypes object includes
+ * audio and video MIME types, including codecs.
+ * with the correct source.
+ *
+ * videoPlaylists, audioPlaylists, and manifestObjects should match one-to-one, where each
+ * index is associated across the arrays.
+ *
+ * Note that only playlists with master manifests are currently supported, as the master
+ * manifests include codec information.
+ *
+ * @param {Object[]} videoPlaylists
+ *        An array of video playlists
+ * @param {Object[]} audioPlaylists
+ *        An array of audio playlists
+ * @param {Object[]} manifestObjects
+ *        An array of master manifest playlists
+ * @return {AudioAndVideoTypes[]}
+ *        An array of audio and video MIME types with codecs
+ *        @see {@link https://www.w3.org/TR/html51/semantics-embedded-content.html#mime-types|Mime Types}
+ */
+export const getAudioAndVideoTypes = ({
+  videoPlaylists,
+  manifestObjects
+}) => {
+  const audioAndVideoTypes = [];
+
+  for (let i = 0; i < videoPlaylists.length; i++) {
+    const videoPlaylist = videoPlaylists[i];
+    const manifestObject = manifestObjects[i];
+    const playlistToCodecsMap = codecsForPlaylists(manifestObject);
+    const codecs = playlistToCodecsMap[videoPlaylist.resolvedUri];
+
+    // HLS media playlist, or an HLS master without the CODECS attribute attached to
+    // playlists
+    if (!codecs) {
+      audioAndVideoTypes.push(null);
+      continue;
+    }
+
+    const types = {
+      // container types are fixed because VHS transmuxes to mp4
+      video: `video/mp4; codecs="${codecs.videoCodec}${codecs.videoObjectTypeIndicator}"`
+    };
+
+    if (codecs.audioProfile) {
+      types.audio = `audio/mp4; codecs="mp4a.40.${codecs.audioProfile}"`;
+    }
+
+    audioAndVideoTypes.push(types);
+  }
+
+  return audioAndVideoTypes;
+};
+
+/**
  * Returns a single rendition VHS formatted master playlist object given a list of
  * manifest strings, their URLs, their mime types, and a target vertical resolution.
  *
@@ -595,10 +794,8 @@ export const resolvePlaylists = ({ playlists, mimeTypes, callback }) => {
  *        Mime type of the manifest
  * @param {number} config.targetVerticalResolution
  *        The vertical resolution to search for among playlists within each manifest
- * @param {function(Object, Object)} config.callback
- *        Callback function with error and concatenated manifest parameters
- *
- * @return {Object} The concatenated manifest object (in the format used by VHS)
+ * @param {function(Object, ConcatenationResult)} config.callback
+ *        Callback function with error and result object parameters
  *
  * @throws Will throw if there are incompatibility errors between the playlists
  */
@@ -654,7 +851,10 @@ const concatenateManifests = ({ manifests, targetVerticalResolution, callback })
       }
 
       allPlaylists.forEach((playlist) => {
-        playlist.segments = resolvedPlaylistsMap[playlist.resolvedUri].segments;
+        const resolvedPlaylist = resolvedPlaylistsMap[playlist.resolvedUri];
+
+        playlist.segments = resolvedPlaylist.segments;
+        playlist.contentProtection = resolvedPlaylist.contentProtection;
       });
 
       const combinedVideoPlaylist = combinePlaylists({ playlists: videoPlaylists });
@@ -662,14 +862,94 @@ const concatenateManifests = ({ manifests, targetVerticalResolution, callback })
         playlists: audioPlaylists,
         uriSuffix: '-audio'
       }) : null;
-
-      callback(null, constructMasterManifest({
+      const manifestObject = constructMasterManifest({
         videoPlaylist: combinedVideoPlaylist,
         audioPlaylist: combinedAudioPlaylist
-      }));
+      });
+      const concatenationResult = { manifestObject };
+
+      const keySystems = manifests.map((manifest) => manifest.keySystems);
+      const containsEncryptedSource = keySystems.reduce((acc, keySystem) => {
+        return acc || !!keySystem;
+      }, false);
+
+      if (containsEncryptedSource) {
+        const audioAndVideoTypes = getAudioAndVideoTypes({
+          videoPlaylists,
+          manifestObjects
+        });
+        const initializeKeySystems = createInitializeKeySystemsFunction({
+          videoPlaylists,
+          audioPlaylists,
+          audioAndVideoTypes,
+          keySystems: manifests.map((manifest) => manifest.keySystems)
+        });
+
+        concatenationResult.initializeKeySystems = initializeKeySystems;
+      }
+
+      callback(null, concatenationResult);
     }
   });
 };
+
+/**
+ * Returns an error message if there's an issue with the user provided manifest objects,
+ * or returns null if no error (at the top level).
+ *
+ * @param {ManifestConfig[]} manifests
+ *        Array of ManifestConfig objects
+ * @return {string|null}
+ *         Error message or null if no error
+ */
+export const getProvidedManifestsError = (manifests) => {
+  if (!manifests || !manifests.length) {
+    return 'No sources provided';
+  }
+
+  for (let i = 0; i < manifests.length; i++) {
+    // The requirement for every manifest needing a URL may be reconsidered in the future
+    // to accept pre-parsed manifest objects.
+    if (!manifests[i].url) {
+      return 'All manifests must include a URL';
+    }
+
+    if (!manifests[i].mimeType) {
+      return 'All manifests must include a mime type';
+    }
+  }
+
+  return null;
+};
+
+/**
+ * @typedef {Object} ManifestConfig
+ * @property {string} url
+ *           URL to the manifest
+ * @property {string} mimeType
+ *           Mime type of the manifest
+ *           @see {@link https://www.w3.org/TR/html51/semantics-embedded-content.html#mime-types|Mime Types}
+ * @property {Object} keySystems
+ *           Manifest's DRM configuration for
+ *           https://github.com/videojs/videojs-contrib-eme
+ *           Assumptions for DRMed content: each video/audio playlist will use the same key
+ *           system configuration, and won't have different PSSH values within a playlist
+ */
+
+/**
+ * @callback initializeKeySystems
+ * @param {Object} player
+ *        The video.js player object
+ */
+
+/**
+ * @typedef {Object} ConcatenationResult
+ * @property {Object} manifestObject
+ *           Concatenated manifest object
+ * @property {initializeKeySystems} [initializeKeySystems]
+ *           Function to call after setting source to initialize EME for DRMed sources if
+ *           DRM is required for any of the sources
+ */
 
 /**
  * Calls back with a single rendition VHS formatted master playlist object given a list of
@@ -682,34 +962,18 @@ const concatenateManifests = ({ manifests, targetVerticalResolution, callback })
  * manifest, then it will fall back to the INITIAL_BANDWIDTH config value from VHS.
  *
  * @param {Object} config
- * @param {Object[]} config.manifests
- * @param {string} config.manifests[].url
- *        URL to a manifest
- * @param {string} config.manifests[].mimeType
- *        Mime type of the manifest
+ * @param {ManifestConfig[]} config.manifests
  * @param {number} config.targetVerticalResolution
  *        The vertical resolution to search for among playlists within each manifest
- * @param {function(Object, Object)} config.callback
- *        Callback function with error and concatenated manifest parameters
+ * @param {function(Object, ConcatenationResult)} config.callback
+ *        Callback function with error and result object parameters
  */
 export const concatenateVideos = ({ manifests, targetVerticalResolution, callback }) => {
-  if (!manifests || !manifests.length) {
-    callback({ message: 'No sources provided' });
+  const errorMessage = getProvidedManifestsError(manifests);
+
+  if (errorMessage) {
+    callback({ message: errorMessage });
     return;
-  }
-
-  for (let i = 0; i < manifests.length; i++) {
-    // The requirement for every manifest needing a URL may be reconsidered in the future
-    // to accept pre-parsed manifest objects.
-    if (!manifests[i].url) {
-      callback({ message: 'All manifests must include a URL' });
-      return;
-    }
-
-    if (!manifests[i].mimeType) {
-      callback({ message: 'All manifests must include a mime type' });
-      return;
-    }
   }
 
   const urls = manifests.map((manifestObject) => manifestObject.url);
@@ -724,7 +988,8 @@ export const concatenateVideos = ({ manifests, targetVerticalResolution, callbac
       return {
         url: manifestObject.url,
         response: responses[manifestObject.url],
-        mimeType: manifestObject.mimeType
+        mimeType: manifestObject.mimeType,
+        keySystems: manifestObject.keySystems
       };
     });
 

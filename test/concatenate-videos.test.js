@@ -198,38 +198,40 @@ QUnit.test('concatenates multiple videos into one', function(assert) {
     assert.deepEqual(
       sourceObject,
       {
-        uri: window.location.href,
-        mediaGroups: {
-          'AUDIO': {},
-          'VIDEO': {},
-          'CLOSED-CAPTIONS': {},
-          'SUBTITLES': {}
-        },
-        playlists: [{
-          attributes: {},
-          uri: 'combined-playlist',
-          resolvedUri: 'combined-playlist',
-          endList: true,
-          mediaSequence: 0,
-          discontinuitySequence: 0,
-          playlistType: 'VOD',
-          targetDuration: 10,
-          discontinuityStarts: [1],
-          segments: [{
-            duration: 10,
-            timeline: 0,
-            number: 0,
-            uri: '0.ts',
-            resolvedUri: `${window.location.origin}/0.ts`
-          }, {
-            duration: 10,
-            discontinuity: true,
-            timeline: 1,
-            number: 1,
-            uri: 'm2s0.ts',
-            resolvedUri: `${window.location.origin}/m2s0.ts`
+        manifestObject: {
+          uri: window.location.href,
+          mediaGroups: {
+            'AUDIO': {},
+            'VIDEO': {},
+            'CLOSED-CAPTIONS': {},
+            'SUBTITLES': {}
+          },
+          playlists: [{
+            attributes: {},
+            uri: 'combined-playlist',
+            resolvedUri: 'combined-playlist',
+            endList: true,
+            mediaSequence: 0,
+            discontinuitySequence: 0,
+            playlistType: 'VOD',
+            targetDuration: 10,
+            discontinuityStarts: [1],
+            segments: [{
+              duration: 10,
+              timeline: 0,
+              number: 0,
+              uri: '0.ts',
+              resolvedUri: `${window.location.origin}/0.ts`
+            }, {
+              duration: 10,
+              discontinuity: true,
+              timeline: 1,
+              number: 1,
+              uri: 'm2s0.ts',
+              resolvedUri: `${window.location.origin}/m2s0.ts`
+            }]
           }]
-        }]
+        }
       },
       'created concatenated video object'
     );
@@ -327,58 +329,60 @@ QUnit.test('concatenates HLS and DASH sources together', function(assert) {
     assert.deepEqual(
       sourceObject,
       {
-        uri: window.location.href,
-        mediaGroups: {
-          'AUDIO': {
-            audio: {
-              default: {
-                autoselect: true,
-                default: true,
-                language: '',
-                playlists: expectedAudioPlaylists,
-                uri: 'combined-audio-playlists'
+        manifestObject: {
+          uri: window.location.href,
+          mediaGroups: {
+            'AUDIO': {
+              audio: {
+                default: {
+                  autoselect: true,
+                  default: true,
+                  language: '',
+                  playlists: expectedAudioPlaylists,
+                  uri: 'combined-audio-playlists'
+                }
               }
-            }
-          },
-          'VIDEO': {},
-          'CLOSED-CAPTIONS': {},
-          'SUBTITLES': {}
-        },
-        playlists: [{
-          attributes: {
-            // bandwidth from the DASH playlist
-            BANDWIDTH: 6800000,
-            // codecs from the DASH playlist (first playlist with CODECS attribute)
-            CODECS: 'avc1.420015',
-            AUDIO: 'audio'
-          },
-          uri: 'combined-playlist',
-          resolvedUri: 'combined-playlist',
-          endList: true,
-          mediaSequence: 0,
-          discontinuitySequence: 0,
-          playlistType: 'VOD',
-          targetDuration: 10,
-          discontinuityStarts: [1],
-          segments: [{
-            duration: 10,
-            timeline: 0,
-            uri: '0.ts',
-            number: 0,
-            resolvedUri: `${window.location.origin}/0.ts`
-          }, {
-            duration: 10,
-            discontinuity: true,
-            timeline: 1,
-            number: 1,
-            map: {
-              uri: '1080p-init.mp4',
-              resolvedUri: `${window.location.origin}/main/video/1080/1080p-init.mp4`
             },
-            uri: '1080p-segment-0.mp4',
-            resolvedUri: `${window.location.origin}/main/video/1080/1080p-segment-0.mp4`
+            'VIDEO': {},
+            'CLOSED-CAPTIONS': {},
+            'SUBTITLES': {}
+          },
+          playlists: [{
+            attributes: {
+              // bandwidth from the DASH playlist
+              BANDWIDTH: 6800000,
+              // codecs from the DASH playlist (first playlist with CODECS attribute)
+              CODECS: 'avc1.420015',
+              AUDIO: 'audio'
+            },
+            uri: 'combined-playlist',
+            resolvedUri: 'combined-playlist',
+            endList: true,
+            mediaSequence: 0,
+            discontinuitySequence: 0,
+            playlistType: 'VOD',
+            targetDuration: 10,
+            discontinuityStarts: [1],
+            segments: [{
+              duration: 10,
+              timeline: 0,
+              uri: '0.ts',
+              number: 0,
+              resolvedUri: `${window.location.origin}/0.ts`
+            }, {
+              duration: 10,
+              discontinuity: true,
+              timeline: 1,
+              number: 1,
+              map: {
+                uri: '1080p-init.mp4',
+                resolvedUri: `${window.location.origin}/main/video/1080/1080p-init.mp4`
+              },
+              uri: '1080p-segment-0.mp4',
+              resolvedUri: `${window.location.origin}/main/video/1080/1080p-segment-0.mp4`
+            }]
           }]
-        }]
+        }
       },
       'created concatenated video object'
     );
