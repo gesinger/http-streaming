@@ -14,11 +14,11 @@ import { updateAdCues } from './ad-cue-tags';
 import SyncController from './sync-controller';
 import Decrypter from 'worker!./decrypter-worker.worker.js';
 import Config from './config';
+import { codecsForPlaylist } from './util/codecs.js';
 import {
   parseCodecs,
-  mapLegacyAvcCodecs,
-  codecsForPlaylist
-} from './util/codecs.js';
+  mapLegacyAvcCodecs
+} from '@videojs/vhs-utils/dist/codecs.js';
 import { createMediaTypes, setupMediaGroups } from './media-groups';
 import logger from './util/logger';
 
