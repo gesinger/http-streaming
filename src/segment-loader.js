@@ -123,7 +123,7 @@ const timingInfoPropertyForMedia = (mediaType) => `${mediaType}TimingInfo`;
  * @return {boolean}
  *         Whether or not any source buffer timestamp offset was changed
  */
-const updateSourceBufferTimestampOffset = ({
+export const updateSourceBufferTimestampOffset = ({
   loaderType,
   timestampOffset,
   sourceUpdater
