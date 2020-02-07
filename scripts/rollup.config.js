@@ -75,6 +75,20 @@ export default [
     },
     external: ['video.js'],
     plugins: umdPlugins
+  },
+  {
+    input: 'utils/reporter/reporter.js',
+    output: {
+      name: 'reporter',
+      file: 'dist-test/reporter.js',
+      format: 'umd',
+      globals: {
+        'video.js': 'videojs'
+      },
+      banner
+    },
+    external: ['video.js'],
+    plugins: umdPlugins
   }, {
     input: 'src/videojs-http-streaming.js',
     output: {
@@ -112,6 +126,22 @@ export default [
     output: [{
       name: 'videojsHttpStreaming',
       file: 'dist/videojs-http-streaming.cjs.js',
+      format: 'cjs',
+      banner
+    }],
+    external: externals,
+    onwarn
+  },
+  {
+    input: 'utils/reporter/reporter.js',
+    plugins: [
+      json(),
+      worker(),
+      babel()
+    ],
+    output: [{
+      name: 'reporter',
+      file: 'dist-test/reporter.cjs.js',
       format: 'cjs',
       banner
     }],

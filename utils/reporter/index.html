@@ -1,0 +1,21 @@
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Fixed Bandwidth Player Tester</title>
+  <link rel="stylesheet" href="/node_modules/video.js/dist/video-js.css">
+</head>
+<body>
+  <h1>Fixed Bandwidth Player Tester</h1>
+  <video
+    id="player"
+    controls
+    class="video-js">
+  </video>
+  <button id="run" type=submit>Run Simulation</button>
+
+  <script src="/node_modules/sinon/pkg/sinon.js"></script>
+  <script src="/node_modules/video.js/dist/alt/video.core.js"></script>
+  <script src="/dist/videojs-http-streaming.js"></script>
+  <script src="/dist-test/reporter.js"></script>
+</body>
+</html>

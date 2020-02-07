@@ -1,0 +1,5 @@
+[
+  { "time": 0, "bandwidth": 8000000 },
+  { "time": 1000, "bandwidth": 16000000 },
+  { "time": 5000, "bandwidth": 32000000 }
+]
