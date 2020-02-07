@@ -78,5 +78,15 @@ export default [
       file: 'src/transmuxer-worker.worker.js'
     },
     external: []
+  }),
+
+  config.makeBuild('browser', {
+    input: 'utils/reporter/reporter.js',
+    output: {
+      format: 'iife',
+      name: 'reporter',
+      file: 'dist-test/reporter.js'
+    },
+    external: []
   })
 ].concat(Object.values(config.builds));

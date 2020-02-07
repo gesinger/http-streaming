@@ -71,6 +71,12 @@ const xhrFactory = function() {
                           (request && (reqResponse || request.responseText)));
       }
 
+      const afterRequest = XhrFunction.afterRequest || videojs.Hls.xhr.afterRequest;
+
+      if (afterRequest && typeof afterRequest === 'function') {
+        afterRequest(error, request, response);
+      }
+
       callback(error, request);
     });
     const originalAbort = request.abort;
