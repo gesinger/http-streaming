@@ -194,7 +194,43 @@ const setupEmeOptions = (hlsHandler) => {
       // works around https://bugs.chromium.org/p/chromium/issues/detail?id=895449
       // in non-IE11 browsers. In IE11 this is too early to initialize media keys
       if (!(videojs.browser.IE_VERSION === 11) && player.eme.initializeMediaKeys) {
-        player.eme.initializeMediaKeys();
+        const psshValues = [];
+
+        // TODO should all audio PSSH values be initialized for DRM?
+        //
+        // All unique video rendition pssh values are initialized for DRM, but here only
+        // the initial audio playlist license is initialized. In theory, an encrypted
+        // event should be fired if the user switches to an alternative audio playlist
+        // where a license is required, but this case hasn't yet been tested.
+        const audioPlaylist = audioPlaylistLoader.media();
+
+        if (audioPlaylist &&
+            audioPlaylist.contentProtection &&
+            audioPlaylist.contentProtection['com.widevine.alpha'] &&
+            audioPlaylist.contentProtection['com.widevine.alpha'].pssh) {
+          psshValues.push(audioPlaylist.contentProtection['com.widevine.alpha'].pssh);
+        }
+
+        const playlists =
+          hlsHandler.masterPlaylistController_.masterPlaylistLoader_.master.playlists;
+
+        playlists.forEach((playlist) => {
+          if (playlist.contentProtection &&
+              playlist.contentProtection['com.widevine.alpha'] &&
+              playlist.contentProtection['com.widevine.alpha'].pssh) {
+            psshValues.push(playlist.contentProtection['com.widevine.alpha'].pssh);
+          }
+        });
+
+        psshValues.forEach((pssh) => {
+          player.eme.initializeMediaKeys({
+            keySystems: {
+              'com.widevine.alpha': {
+                pssh
+              }
+            }
+          });
+        });
       }
     }
   }
