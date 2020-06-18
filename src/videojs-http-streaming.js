@@ -171,63 +171,115 @@ const emeKeySystems = (keySystemOptions, videoPlaylist, audioPlaylist) => {
   return videojs.mergeOptions(keySystemOptions, keySystemContentTypes);
 };
 
-const setupEmeOptions = (vhsHandler) => {
-  const player = vhsHandler.player_;
+/**
+ * @typedef {Object} KeySystems
+ *
+ * keySystems configuration for https://github.com/videojs/videojs-contrib-eme
+ * Note: not all options are listed here.
+ *
+ * @property {Uint8Array} [pssh]
+ *           Protection System Specific Header
+ */
 
-  if (player.eme) {
-    const audioPlaylistLoader = vhsHandler.masterPlaylistController_.mediaTypes_.AUDIO.activePlaylistLoader;
-    const sourceOptions = emeKeySystems(
-      vhsHandler.source_.keySystems,
-      vhsHandler.playlists.media(),
-      audioPlaylistLoader && audioPlaylistLoader.media()
-    );
+/**
+ * @typedef {Object} EmeOptions
+ *
+ * Options for https://github.com/videojs/videojs-contrib-eme
+ * Note: not all options are listed here.
+ *
+ * @property {KeySystems[]} keySystems
+ */
 
-    if (sourceOptions) {
-      player.currentSource().keySystems = sourceOptions;
-
-      // works around https://bugs.chromium.org/p/chromium/issues/detail?id=895449
-      // in non-IE11 browsers. In IE11 this is too early to initialize media keys
-      if (!(videojs.browser.IE_VERSION === 11) && player.eme.initializeMediaKeys) {
-        const psshValues = [];
-
-        // TODO should all audio PSSH values be initialized for DRM?
-        //
-        // All unique video rendition pssh values are initialized for DRM, but here only
-        // the initial audio playlist license is initialized. In theory, an encrypted
-        // event should be fired if the user switches to an alternative audio playlist
-        // where a license is required, but this case hasn't yet been tested.
-        const audioPlaylist = audioPlaylistLoader.media();
-
-        if (audioPlaylist &&
-            audioPlaylist.contentProtection &&
-            audioPlaylist.contentProtection['com.widevine.alpha'] &&
-            audioPlaylist.contentProtection['com.widevine.alpha'].pssh) {
-          psshValues.push(audioPlaylist.contentProtection['com.widevine.alpha'].pssh);
-        }
-
-        const playlists =
-          hlsHandler.masterPlaylistController_.masterPlaylistLoader_.master.playlists;
-
-        playlists.forEach((playlist) => {
-          if (playlist.contentProtection &&
-              playlist.contentProtection['com.widevine.alpha'] &&
-              playlist.contentProtection['com.widevine.alpha'].pssh) {
-            psshValues.push(playlist.contentProtection['com.widevine.alpha'].pssh);
-          }
-        });
-
-        psshValues.forEach((pssh) => {
-          player.eme.initializeMediaKeys({
-            keySystems: {
-              'com.widevine.alpha': {
-                pssh
-              }
-            }
-          });
-        });
-      }
+/**
+ * Goes through all the playlists and collects an array of KeySystems options objects
+ * containing each playlist's keySystems and their pssh values, if available.
+ *
+ * @param {Object[]} playlists
+ *        The playlists to look through
+ * @param {string[]} keySystems
+ *        The keySystems to collect pssh values for
+ *
+ * @return {KeySystems[]}
+ *         An array of KeySystems objects containining available key systems and their
+ *         pssh values
+ */
+const getAllPsshKeySystemsOptions = (playlists, keySystems) => {
+  return playlists.reduce((keySystemsArr, playlist) => {
+    if (!playlist.contentProtection) {
+      return keySystemsArr;
     }
+
+    const keySystemsOptions = keySystems.reduce((keySystemsObj, keySystem) => {
+      const keySystemOptions = playlist.contentProtection[keySystem];
+
+      if (keySystemOptions && keySystemOptions.pssh) {
+        keySystemsObj[keySystem] = { pssh: keySystemOptions.pssh };
+      }
+
+      return keySystemsObj;
+    }, {});
+
+    if (Object.keys(keySystemsOptions)) {
+      keySystemsArr.push(keySystemsOptions);
+    }
+
+    return keySystemsArr;
+  }, []);
+};
+
+const setupEmeOptions = ({
+  player,
+  audioPlaylistLoader,
+  keySystems,
+  sourceKeySystems,
+  media,
+  master
+}) => {
+  if (!player.eme) {
+    return;
   }
+
+  const sourceOptions = emeKeySystems(
+    sourceKeySystems,
+    media,
+    audioPlaylistLoader && audioPlaylistLoader.media()
+  );
+
+  if (!sourceOptions) {
+    return;
+  }
+
+  player.currentSource().keySystems = sourceOptions;
+
+  // works around https://bugs.chromium.org/p/chromium/issues/detail?id=895449
+  // in non-IE11 browsers. In IE11 this is too early to initialize media keys
+  if (videojs.browser.IE_VERSION === 11 || !player.eme.initializeMediaKeys) {
+    return;
+  }
+
+  const mainPlaylists = master.playlists;
+  // TODO should all audio PSSH values be initialized for DRM?
+  //
+  // All unique video rendition pssh values are initialized for DRM, but here only
+  // the initial audio playlist license is initialized. In theory, an encrypted
+  // event should be fired if the user switches to an alternative audio playlist
+  // where a license is required, but this case hasn't yet been tested.
+  const audioPlaylist = audioPlaylistLoader.media();
+  const playlists = audioPlaylist ? mainPlaylists.concat([audioPlaylist]) : mainPlaylists;
+
+  const keySystemsOptionsArr = getAllPsshKeySystemsOptions(
+    playlists,
+    Object.keys(sourceKeySystems)
+  );
+
+  // Since PSSH values are interpreted as initData, EME will dedupe any duplicates
+  // Note also that this should only be using the modern EME APIs. The main concern
+  // being IE11 and Edge, but Edge supports modern and ms-prefixed.
+  keySystemsOptionsArr.forEach((keySystemsOptions) => {
+    player.eme.initializeMediaKeys({
+      keySystems: keySystemsOptions
+    });
+  });
 };
 
 const getVhsLocalStorage = () => {
@@ -759,7 +811,14 @@ class VhsHandler extends Component {
     this.masterPlaylistController_.on('selectedinitialmedia', () => {
       // Add the manual rendition mix-in to VhsHandler
       renditionSelectionMixin(this);
-      setupEmeOptions(this);
+      setupEmeOptions({
+        player: this.player_,
+        audioPlaylistLoader:
+          this.masterPlaylistController_.mediaTypes_.AUDIO.activePlaylistLoader,
+        sourceKeySystems: this.source_.keySystems,
+        media: this.playlists.media(),
+        master: this.playlists.master
+      });
     });
 
     // the bandwidth of the primary segment loader is our best
@@ -1015,5 +1074,6 @@ export {
   VhsSourceHandler,
   emeKeySystems,
   simpleTypeFromSourceType,
-  expandDataUri
+  expandDataUri,
+  setupEmeOptions
 };
