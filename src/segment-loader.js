@@ -7,7 +7,7 @@ import Config from './config';
 import window from 'global/window';
 import { initSegmentId, segmentKeyId } from './bin-utils';
 import { mediaSegmentRequest, REQUEST_ERRORS } from './media-segment-request';
-import TransmuxWorker from 'worker!./transmuxer-worker.worker.js';
+import TransmuxWorker from 'worker!./transmuxer-worker.js';
 import segmentTransmuxer from './segment-transmuxer';
 import { TIME_FUDGE_FACTOR, timeUntilRebuffer as timeUntilRebuffer_ } from './ranges';
 import { minRebufferMaxBandwidthSelector } from './playlist-selectors';
@@ -475,6 +475,7 @@ export default class SegmentLoader extends videojs.EventTarget {
     this.handlePartialData_ = settings.handlePartialData;
     this.timelineChangeController_ = settings.timelineChangeController;
     this.shouldSaveSegmentTimingInfo_ = true;
+    this.parse708captions_ = settings.parse708captions;
 
     // private instance variables
     this.checkBufferTimeout_ = null;
@@ -595,6 +596,7 @@ export default class SegmentLoader extends videojs.EventTarget {
     transmuxer.postMessage({
       action: 'init',
       options: {
+        parse708captions: this.parse708captions_,
         remux: false,
         alignGopsAtEnd: this.safeAppend_,
         keepOriginalTimestamps: true,
