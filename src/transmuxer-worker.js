@@ -65,6 +65,10 @@ const wireFullTransmuxerEvents = function(self, transmuxer) {
     self.postMessage({ action: 'done' });
   });
 
+  transmuxer.on('endedtimeline', function(data) {
+    self.postMessage({ action: 'endedtimeline' });
+  });
+
   transmuxer.on('gopInfo', function(gopInfo) {
     self.postMessage({
       action: 'gopInfo',
@@ -219,6 +223,10 @@ const wirePartialTransmuxerEvents = function(self, transmuxer) {
       action: 'done',
       type: typeFromStreamString(data)
     });
+  });
+
+  transmuxer.on('endedtimeline', function(data) {
+    self.postMessage({ action: 'endedtimeline' });
   });
 
   transmuxer.on('partialdone', function(data) {

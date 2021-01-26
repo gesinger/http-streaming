@@ -266,6 +266,8 @@ const transmuxAndNotify = ({
   audioSegmentTimingInfoFn,
   id3Fn,
   captionsFn,
+  isEndOfTimeline,
+  endedTimelineFn,
   dataFn,
   doneFn
 }) => {
@@ -360,6 +362,9 @@ const transmuxAndNotify = ({
     onCaptions: (captions) => {
       captionsFn(segment, [captions]);
     },
+    onEndedTimeline: () => {
+      endedTimelineFn();
+    },
     onDone: (result) => {
       // To handle partial appends, there won't be a done function passed in (since
       // there's still, potentially, more segment to process), so there's nothing to do.
@@ -368,7 +373,8 @@ const transmuxAndNotify = ({
       }
       result.type = result.type === 'combined' ? 'video' : result.type;
       doneFn(null, segment, result);
-    }
+    },
+    isEndOfTimeline
   });
 };
 
@@ -382,6 +388,8 @@ const handleSegmentBytes = ({
   audioSegmentTimingInfoFn,
   id3Fn,
   captionsFn,
+  isEndOfTimeline,
+  endedTimelineFn,
   dataFn,
   doneFn
 }) => {
@@ -513,6 +521,8 @@ const handleSegmentBytes = ({
     audioSegmentTimingInfoFn,
     id3Fn,
     captionsFn,
+    isEndOfTimeline,
+    endedTimelineFn,
     dataFn,
     doneFn
   });
@@ -546,6 +556,8 @@ const decryptSegment = ({
   audioSegmentTimingInfoFn,
   id3Fn,
   captionsFn,
+  isEndOfTimeline,
+  endedTimelineFn,
   dataFn,
   doneFn
 }) => {
@@ -570,6 +582,8 @@ const decryptSegment = ({
         audioSegmentTimingInfoFn,
         id3Fn,
         captionsFn,
+        isEndOfTimeline,
+        endedTimelineFn,
         dataFn,
         doneFn
       });
@@ -632,6 +646,8 @@ const waitForCompletion = ({
   audioSegmentTimingInfoFn,
   id3Fn,
   captionsFn,
+  isEndOfTimeline,
+  endedTimelineFn,
   dataFn,
   doneFn
 }) => {
@@ -678,6 +694,8 @@ const waitForCompletion = ({
           audioSegmentTimingInfoFn,
           id3Fn,
           captionsFn,
+          isEndOfTimeline,
+          endedTimelineFn,
           dataFn,
           doneFn
         });
@@ -693,6 +711,8 @@ const waitForCompletion = ({
         audioSegmentTimingInfoFn,
         id3Fn,
         captionsFn,
+        isEndOfTimeline,
+        endedTimelineFn,
         dataFn,
         doneFn
       });
@@ -745,6 +765,8 @@ const handleProgress = ({
   audioSegmentTimingInfoFn,
   id3Fn,
   captionsFn,
+  isEndOfTimeline,
+  endedTimelineFn,
   dataFn,
   handlePartialData
 }) => (event) => {
@@ -782,6 +804,8 @@ const handleProgress = ({
         audioSegmentTimingInfoFn,
         id3Fn,
         captionsFn,
+        isEndOfTimeline,
+        endedTimelineFn,
         dataFn
       });
     }
@@ -873,6 +897,8 @@ export const mediaSegmentRequest = ({
   audioSegmentTimingInfoFn,
   id3Fn,
   captionsFn,
+  isEndOfTimeline,
+  endedTimelineFn,
   dataFn,
   doneFn,
   handlePartialData
@@ -887,6 +913,8 @@ export const mediaSegmentRequest = ({
     audioSegmentTimingInfoFn,
     id3Fn,
     captionsFn,
+    isEndOfTimeline,
+    endedTimelineFn,
     dataFn,
     doneFn
   });
@@ -954,6 +982,8 @@ export const mediaSegmentRequest = ({
       audioSegmentTimingInfoFn,
       id3Fn,
       captionsFn,
+      isEndOfTimeline,
+      endedTimelineFn,
       dataFn,
       handlePartialData
     })
