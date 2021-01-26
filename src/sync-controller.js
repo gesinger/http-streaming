@@ -27,7 +27,7 @@ export const syncPointStrategies = [
   {
     name: 'ProgramDateTime',
     run: (syncController, playlist, duration, currentTimeline, currentTime) => {
-      if (!syncController.datetimeToDisplayTime) {
+      if (!syncController.timelineToDatetimeMappings.length) {
         return null;
       }
 
@@ -39,10 +39,16 @@ export const syncPointStrategies = [
 
       for (let i = 0; i < segments.length; i++) {
         const segment = segments[i];
+        const datetimeMapping =
+          syncController.timelineToDatetimeMappings[segment.timeline];
+
+        if (!datetimeMapping) {
+          continue;
+        }
 
         if (segment.dateTimeObject) {
           const segmentTime = segment.dateTimeObject.getTime() / 1000;
-          const segmentStart = segmentTime + syncController.datetimeToDisplayTime;
+          const segmentStart = segmentTime + datetimeMapping;
           const distance = Math.abs(currentTime - segmentStart);
 
           // Once the distance begins to increase, or if distance is 0, we have passed
@@ -161,7 +167,7 @@ export default class SyncController extends videojs.EventTarget {
     // ...for synching across variants
     this.timelines = [];
     this.discontinuities = [];
-    this.datetimeToDisplayTime = null;
+    this.timelineToDatetimeMappings = [];
 
     this.logger_ = logger('SyncController');
   }
@@ -357,13 +363,13 @@ export default class SyncController extends videojs.EventTarget {
    * @param {Playlist} playlist - The currently active playlist
    */
   setDateTimeMapping(playlist) {
-    if (!this.datetimeToDisplayTime &&
+    if (this.timelineToDatetimeMappings.length === 0 &&
         playlist.segments &&
         playlist.segments.length &&
         playlist.segments[0].dateTimeObject) {
       const playlistTimestamp = playlist.segments[0].dateTimeObject.getTime() / 1000;
 
-      this.datetimeToDisplayTime = -playlistTimestamp;
+      this.timelineToDatetimeMappings[playlist.segments[0].timeline] = -playlistTimestamp;
     }
   }
 
@@ -469,6 +475,7 @@ export default class SyncController extends videojs.EventTarget {
   saveDiscontinuitySyncInfo_(segmentInfo) {
     const playlist = segmentInfo.playlist;
     const segment = segmentInfo.segment;
+    const dateTime = segment.dateTimeObject;
 
     // If the current segment is a discontinuity then we know exactly where
     // the start of the range and it's accuracy is 0 (greater accuracy values
@@ -478,6 +485,9 @@ export default class SyncController extends videojs.EventTarget {
         time: segment.start,
         accuracy: 0
       };
+      if (dateTime) {
+        this.timelineToDatetimeMappings[segment.timeline] = dateTime.getTime() / 1000;
+      }
     } else if (playlist.discontinuityStarts && playlist.discontinuityStarts.length) {
       // Search for future discontinuities that we can provide better timing
       // information for and save that information for sync purposes
