@@ -516,6 +516,8 @@ export default class SegmentLoader extends videojs.EventTarget {
     this.mediaIndex = null;
     this.partIndex = null;
 
+    this.debugLastLoaded_ = [];
+
     // private settings
     this.hasPlayed_ = settings.hasPlayed;
     this.currentTime_ = settings.currentTime;
@@ -2884,6 +2886,12 @@ export default class SegmentLoader extends videojs.EventTarget {
       } else {
         this.logger_(segmentDurationMessage.message);
       }
+    }
+
+    this.debugLastLoaded_.push(segmentInfo);
+
+    if (this.debugLastLoaded_.length > 10) {
+      this.debugLastLoaded_.shift();
     }
 
     this.recordThroughput_(segmentInfo);

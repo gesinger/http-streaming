@@ -85,6 +85,8 @@ const dashPlaylistUnchanged = function(a, b) {
   return true;
 };
 
+window.highestSeenStartingTimeline = 0;
+
 /**
  * Parses the master XML string and updates playlist URI references.
  *
@@ -101,12 +103,21 @@ const dashPlaylistUnchanged = function(a, b) {
  * @return {Object}
  *         The parsed mpd manifest object
  */
-export const parseMasterXml = ({ masterXml, srcUrl, clientOffset, sidxMapping }) => {
+export const parseMasterXml = ({ masterXml, srcUrl, clientOffset, sidxMapping, lastMpd }) => {
   const master = parseMpd(masterXml, {
     manifestUri: srcUrl,
     clientOffset,
-    sidxMapping
+    sidxMapping,
+    lastMpd
   });
+
+  if (master.playlists[0].timeline > window.highestSeenStartingTimeline) {
+    console.log('DEBOG: updating highest seen starting timeline from ' +
+      window.highestSeenStartingTimeline + ' to ' + master.playlists[0].timeline);
+    window.highestSeenStartingTimeline = master.playlists[0].timeline;
+  } else if (master.playlists[0].timeline < window.highestSeenStartingTimeline) {
+    debugger;
+  }
 
   addPropertiesToMaster(master, srcUrl);
 
@@ -703,7 +714,8 @@ export default class DashPlaylistLoader extends EventTarget {
       masterXml: this.masterPlaylistLoader_.masterXml_,
       srcUrl: this.masterPlaylistLoader_.srcUrl,
       clientOffset: this.masterPlaylistLoader_.clientOffset_,
-      sidxMapping: this.masterPlaylistLoader_.sidxMapping_
+      sidxMapping: this.masterPlaylistLoader_.sidxMapping_,
+      lastMpd: this.masterPlaylistLoader_.master
     });
     const oldMaster = this.masterPlaylistLoader_.master;
 

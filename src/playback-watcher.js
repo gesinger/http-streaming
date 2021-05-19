@@ -11,6 +11,7 @@
 import window from 'global/window';
 import * as Ranges from './ranges';
 import logger from './util/logger';
+import debugInfo from './debug-info';
 
 // Set of events that reset the playback-watcher time check logic and clear the timeout
 const timerCancelEvents = [
@@ -100,7 +101,10 @@ export default class PlaybackWatcher {
     loaderTypes.forEach((type) => {
       loaderChecks[type] = {
         reset: () => this.resetSegmentDownloads_(type),
-        updateend: () => this.checkSegmentDownloads_(type)
+        updateend: () => {
+          this.checkBufferForGaps_(type);
+          this.checkSegmentDownloads_(type);
+        }
       };
 
       mpc[`${type}SegmentLoader_`].on('appendsdone', loaderChecks[type].updateend);
@@ -191,6 +195,16 @@ export default class PlaybackWatcher {
     this[`${type}Buffered_`] = loader.buffered_();
   }
 
+  checkBufferForGaps_(type) {
+    const mpc = this.masterPlaylistController_;
+    const loader = mpc[`${type}SegmentLoader_`];
+    const buffered = loader.buffered_();
+
+    if (buffered.length > 1) {
+      debugger;
+    }
+  }
+
   /**
    * Checks on every segment `appendsdone` to see
    * if segment appends are making progress. If they are not
@@ -224,6 +238,10 @@ export default class PlaybackWatcher {
       buffered: Ranges.timeRangesToArray(buffered)
 
     });
+
+    if (!loader.pendingSegment_.isSyncRequest) {
+      debugger;
+    }
 
     // after 10 possibly stalled appends with no reset, exclude
     if (this[`${type}StalledDownloads_`] < 10) {
@@ -401,6 +419,15 @@ export default class PlaybackWatcher {
     // to avoid triggering an `unknownwaiting` event when the network is slow.
     if (currentRange.length && currentTime + 3 <= currentRange.end(0)) {
       this.cancelTimer_();
+      console.warn(`DEBOG: Stopped at ${currentTime} while inside a buffered region ` +
+        `[${currentRange.start(0)} -> ${currentRange.end(0)}].`);
+      debugInfo.log();
+      debugger;
+      /*
+      this.tech_.pause();
+      this.tech_.play();
+      */
+      return;
       this.tech_.setCurrentTime(currentTime);
 
       this.logger_(`Stopped at ${currentTime} while inside a buffered region ` +

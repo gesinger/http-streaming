@@ -666,7 +666,7 @@ export default class SourceUpdater extends videojs.EventTarget {
     pushQueue({
       type: 'mediaSource',
       sourceUpdater: this,
-      action: actions.duration(duration),
+      action: actions.duration(duration + 100),
       name: 'duration',
       doneFn
     });
